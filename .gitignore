@@ -1,0 +1,17 @@
+.DS_Store
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Local app packages and temporary design output
+build/
+tmp/
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+
+# Local editor files
+.idea/
+.vscode/

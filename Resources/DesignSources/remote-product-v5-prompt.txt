@@ -1,0 +1,19 @@
+Use case: precise-object-edit
+Asset type: final high-resolution in-app product cutout source
+Input images: Image 1 is the exact full straight-on remote geometry and layout to preserve; Image 2 is the user-approved material, edge construction, button finish, and lighting reference; Image 3 is the original official straight-on product identity reference.
+
+Primary request: change only the material rendering, surface finish, edge construction, and studio lighting of Image 1 so it achieves the premium physical realism of Image 2. Keep Image 1's entire straight-on silhouette, proportions, full composition, button count, positions, sizes, and all icons unchanged.
+
+Scene/backdrop: perfectly flat exactly uniform solid #00ff00 chroma-key background, no gradient, no texture, no horizon, no cast shadow, no reflection, no floor plane.
+
+Product geometry: one complete Xiaomi Bluetooth Remote 2 Pro, perfectly centered, vertical, viewed orthographically straight from the front. Do not crop any part. Keep the narrow tall body, rounded top and bottom, side rails, the two upper round silver buttons, circular black D-pad with separate inset OK button, three lower left round black buttons, tall split volume rocker on the lower right, and bottom right TV button. Preserve every control and icon exactly; do not add, remove, merge, move, resize, relabel, or redesign anything.
+
+Material and construction: premium cool silver bead-blasted anodized aluminum face with fine directional micrograin. Create clearly defined layered side rails and seams like Image 2, with thin dark recessed gaps, a narrow polished bevel, and restrained bright specular edge lines. The body must have real machined depth rather than a flat painted gradient. Keep the central face a clean cool silver with gentle tonal falloff.
+
+Buttons: deep graphite-black buttons with convincing molded or coated physical depth, crisp inset perimeter rings, thin dark grooves, tight contact shadows, and controlled soft glossy highlight patches. The D-pad must show separate outer ring, inner OK disc, fine bevels, and subtle concentric reflections. The volume rocker must read as one pill-shaped physical assembly split into two tactile zones. Icons are softly engraved or printed in muted light gray and remain accurate.
+
+Lighting: refined neutral studio product photography, broad soft frontal key light, narrow rim highlights along the aluminum rails and button bevels, high local contrast in seams, restrained reflections, no cinematic bloom, no dramatic vignette, no colored lighting.
+
+Style: photorealistic premium consumer-electronics catalog render, precise industrial design, Logitech Options+ level polish, physically plausible materials, clean anti-aliased edges, high resolution.
+
+Negative constraints: no perspective tilt, no three-quarter view, no hands, no scene props, no UI, no labels outside the device, no watermark, no extra controls, no altered symbols, no black plastic body, no soft clay render, no cartoon look, no flat vector look, no green spill on product edges.
