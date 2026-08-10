@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -39,6 +40,8 @@ final class SystemActionExecutor: ActionExecuting {
             await pasteText(value)
         case .delay(let milliseconds):
             try? await Task.sleep(for: .milliseconds(max(0, milliseconds)))
+        case .startDictation:
+            await startDictation()
         case .showActionsRing:
             NotificationCenter.default.post(name: .showActionsRingRequested, object: nil)
         case .sequence(let commands):
@@ -222,12 +225,15 @@ final class SystemActionExecutor: ActionExecuting {
         pasteboard.clearContents()
         pasteboard.setString(prompt, forType: .string)
 
-        if NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.chat") != nil {
-            openApplication(bundleIdentifier: "com.openai.chat")
+        let codexBundleIdentifier = ["com.openai.codex", "com.openai.chat"].first {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil
+        }
+        if let codexBundleIdentifier {
+            openApplication(bundleIdentifier: codexBundleIdentifier)
             for _ in 0..<12 {
                 try? await Task.sleep(for: .milliseconds(100))
                 if NSRunningApplication
-                    .runningApplications(withBundleIdentifier: "com.openai.chat")
+                    .runningApplications(withBundleIdentifier: codexBundleIdentifier)
                     .contains(where: { $0.isActive }) {
                     break
                 }
@@ -244,6 +250,82 @@ final class SystemActionExecutor: ActionExecuting {
             return
         }
         NSWorkspace.shared.open(destination)
+    }
+
+    /// Starts the system dictation command in the active application without
+    /// synthesizing the user's Globe/fn shortcut. This keeps remote voice input
+    /// independent from whatever action macOS has assigned to Globe/fn.
+    private func startDictation() async {
+        if let application = NSWorkspace.shared.frontmostApplication,
+           application.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+           pressMenuItem(withCommandGlyph: 150, in: application.processIdentifier) {
+            return
+        }
+
+        // Accessibility can be unavailable briefly while an application is
+        // launching. Fall back to the standard double-fn gesture so dictation
+        // still works on machines that have not granted Accessibility yet.
+        postKey(63, flags: .maskSecondaryFn)
+        try? await Task.sleep(for: .milliseconds(90))
+        postKey(63, flags: .maskSecondaryFn)
+    }
+
+    private func pressMenuItem(withCommandGlyph glyph: Int, in processIdentifier: pid_t) -> Bool {
+        let application = AXUIElementCreateApplication(processIdentifier)
+        guard let menuBarValue = accessibilityValue(
+            of: application,
+            attribute: kAXMenuBarAttribute as CFString
+        ), CFGetTypeID(menuBarValue) == AXUIElementGetTypeID() else {
+            return false
+        }
+        let menuBar = unsafeDowncast(menuBarValue, to: AXUIElement.self)
+        guard
+        let menuItem = descendantMenuItem(in: menuBar, commandGlyph: glyph, remainingDepth: 6) else {
+            return false
+        }
+        return AXUIElementPerformAction(menuItem, kAXPressAction as CFString) == .success
+    }
+
+    private func descendantMenuItem(
+        in element: AXUIElement,
+        commandGlyph: Int,
+        remainingDepth: Int
+    ) -> AXUIElement? {
+        if let value = accessibilityValue(
+            of: element,
+            attribute: kAXMenuItemCmdGlyphAttribute as CFString
+        ) as? NSNumber,
+        value.intValue == commandGlyph {
+            return element
+        }
+        guard remainingDepth > 0,
+              let children = accessibilityValue(
+                of: element,
+                attribute: kAXChildrenAttribute as CFString
+              ) as? [AXUIElement] else {
+            return nil
+        }
+        for child in children {
+            if let match = descendantMenuItem(
+                in: child,
+                commandGlyph: commandGlyph,
+                remainingDepth: remainingDepth - 1
+            ) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    private func accessibilityValue(
+        of element: AXUIElement,
+        attribute: CFString
+    ) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+            return nil
+        }
+        return value
     }
 
     private func copySelectedText() async -> String? {

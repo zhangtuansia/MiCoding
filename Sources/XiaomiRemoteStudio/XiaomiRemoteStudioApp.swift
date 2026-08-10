@@ -107,6 +107,9 @@ final class MiCodingApplicationDelegate: NSObject, NSApplicationDelegate {
     func presentMainWindow() {
         if !preparedApplication {
             NSApp.mainMenu = makeMainMenu()
+            if CommandLine.arguments.contains("--install-ai-vibe-coding-preset") {
+                store.installAIVibeCodingPreset()
+            }
             preparedApplication = true
         }
         showMainWindow()

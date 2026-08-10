@@ -876,6 +876,26 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(remapper.uninstallCount, 1)
     }
 
+    @MainActor
+    func testRemoteVoiceReportsTravelThroughBackendWithoutBecomingButtonEvents() async {
+        let input = ControllableRemoteInputService()
+        let coordinator = BackendCoordinator(inputService: input, keyRemapper: nil)
+        let expected = RemoteVoiceReport(
+            reportID: 7,
+            bytes: [0x10, 0x20, 0x30],
+            timestamp: Date(timeIntervalSince1970: 123)
+        )
+        var received: RemoteVoiceReport?
+        coordinator.onVoiceReport = { received = $0 }
+
+        coordinator.start()
+        input.emitVoice(expected)
+        await Task.yield()
+
+        XCTAssertEqual(received, expected)
+        coordinator.stop()
+    }
+
     func testPersistedConfigurationRoundTrip() throws {
         let original = PersistedConfiguration(
             settings: BackendSettings(),
@@ -1083,6 +1103,60 @@ final class BackendModelsTests: XCTestCase {
         let readdedState = AppStore(configurationStore: configurationStore)
         XCTAssertTrue(readdedState.profiles.contains(where: { $0.id == removableProfile.id }))
         XCTAssertEqual(readdedState.selectedProfileID, removableProfile.id)
+    }
+
+    @MainActor
+    func testAIVibeCodingPresetConfiguresBothAppsAndPreservesOtherGlobalButtons() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiCoding-AIPresetTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let configurationStore = LocalConfigurationStore(
+            fileURL: directory.appendingPathComponent("config.json")
+        )
+        let store = AppStore(configurationStore: configurationStore, runtimeServicesEnabled: false)
+        store.installAIVibeCodingPreset()
+
+        XCTAssertEqual(store.assignmentsByProfile["global"]?["power"], "open-codex")
+        XCTAssertEqual(store.assignmentsByProfile["global"]?["voice"], "voice-codex")
+        XCTAssertEqual(store.assignmentsByProfile["global"]?["menu"], "screenshot")
+        XCTAssertEqual(
+            store.assignmentsByProfile["com.openai.codex"]?["voice"],
+            "start-dictation"
+        )
+        XCTAssertEqual(
+            store.assignmentsByProfile["com.anthropic.claudefordesktop"]?["home"],
+            "claude-new-conversation"
+        )
+        XCTAssertEqual(
+            store.actionsRingAssignmentsByProfile["com.openai.codex"],
+            [
+                "voice-codex",
+                "codex-new-chat",
+                "ai-submit",
+                "codex-open-terminal",
+                "codex-toggle-file-tree",
+                "codex-toggle-review",
+                "codex-previous-chat",
+                "codex-next-chat"
+            ]
+        )
+
+        let restored = AppStore(
+            configurationStore: configurationStore,
+            runtimeServicesEnabled: false
+        )
+        XCTAssertTrue(restored.profiles.contains(where: { $0.id == "com.openai.codex" }))
+        XCTAssertTrue(restored.profiles.contains(where: {
+            $0.id == "com.anthropic.claudefordesktop"
+        }))
+
+        let codexProfile = try XCTUnwrap(
+            restored.profiles.first(where: { $0.id == "com.openai.codex" })
+        )
+        restored.selectProfile(codexProfile)
+        XCTAssertEqual(restored.action(for: "voice", trigger: .tap)?.id, "start-dictation")
+        XCTAssertEqual(restored.action(for: "power", trigger: .doubleTap)?.id, "open-claude")
     }
 
     @MainActor
@@ -1801,6 +1875,26 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(
             ActionCommand.command(for: "explore-ai"),
             .openURL("https://chatgpt.com")
+        )
+        XCTAssertEqual(
+            ActionCommand.command(for: "voice-codex"),
+            .sequence([
+                .openApplication(bundleIdentifier: "com.openai.codex"),
+                .delay(milliseconds: 650),
+                .startDictation
+            ])
+        )
+        XCTAssertEqual(
+            ActionCommand.command(for: "voice-claude"),
+            .sequence([
+                .openApplication(bundleIdentifier: "com.anthropic.claudefordesktop"),
+                .delay(milliseconds: 650),
+                .startDictation
+            ])
+        )
+        XCTAssertEqual(
+            ActionCommand.command(for: "codex-open-terminal"),
+            .keyStroke(keyCode: 50, flags: UInt64(1 << 18))
         )
         XCTAssertEqual(
             ActionCommand.command(for: "launch-micoding"),
@@ -3011,6 +3105,7 @@ private final class RecordingDeviceKeyRemapper: DeviceKeyRemapping {
 
 private final class ControllableRemoteInputService: RemoteInputServicing {
     var onEvent: ((RemoteInputEvent) -> Void)?
+    var onVoiceReport: ((RemoteVoiceReport) -> Void)?
     var onConnectionChanged: ((Bool) -> Void)?
     var onUnknownUsage: ((UInt32, Bool) -> Void)?
 
@@ -3019,5 +3114,9 @@ private final class ControllableRemoteInputService: RemoteInputServicing {
 
     func emitConnection(_ connected: Bool) {
         onConnectionChanged?(connected)
+    }
+
+    func emitVoice(_ report: RemoteVoiceReport) {
+        onVoiceReport?(report)
     }
 }

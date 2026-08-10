@@ -8,6 +8,7 @@ final class BackendCoordinator {
     var resolveActionID: ((String?, String, RemoteTrigger) -> String?)?
     var resolveCommand: ((String) -> ActionCommand?)?
     var onInputEvent: ((RemoteInputEvent) -> Void)?
+    var onVoiceReport: ((RemoteVoiceReport) -> Void)?
     var onUnknownUsage: ((UInt32, Bool) -> Void)?
     var onConnectionChanged: ((Bool) -> Void)?
     var onLog: ((String) -> Void)?
@@ -140,6 +141,12 @@ final class BackendCoordinator {
                     return
                 }
                 self.routeInputEvent(event)
+            }
+        }
+
+        inputService.onVoiceReport = { [weak self] report in
+            Task { @MainActor in
+                self?.onVoiceReport?(report)
             }
         }
 

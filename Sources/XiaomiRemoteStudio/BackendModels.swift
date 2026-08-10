@@ -133,6 +133,7 @@ indirect enum ActionCommand: Codable, Equatable, Sendable {
     case openURLWithSelectedTextPrompt(url: String, instruction: String)
     case typeText(String)
     case delay(milliseconds: Int)
+    case startDictation
     case showActionsRing
     case sequence([ActionCommand])
     case none
@@ -189,6 +190,44 @@ indirect enum ActionCommand: Codable, Equatable, Sendable {
         ])
         case "explore-ai": .openURL("https://chatgpt.com")
         case "launch-micoding": .openApplication(bundleIdentifier: "io.xiaomiremote.studio")
+        case "open-codex": .openApplication(bundleIdentifier: "com.openai.codex")
+        case "open-claude": .openApplication(bundleIdentifier: "com.anthropic.claudefordesktop")
+        case "start-dictation": .startDictation
+        case "voice-codex": .sequence([
+            .openApplication(bundleIdentifier: "com.openai.codex"),
+            .delay(milliseconds: 650),
+            .startDictation
+        ])
+        case "voice-claude": .sequence([
+            .openApplication(bundleIdentifier: "com.anthropic.claudefordesktop"),
+            .delay(milliseconds: 650),
+            .startDictation
+        ])
+        case "ai-submit": .keyStroke(keyCode: 36, flags: 0)
+        case "ai-newline": .keyStroke(keyCode: 36, flags: UInt64(1 << 17))
+        case "ai-cancel": .keyStroke(keyCode: 53, flags: 0)
+        case "ai-attach-file": .keyStroke(keyCode: 31, flags: UInt64(1 << 20))
+        case "codex-new-chat", "claude-new-conversation": .keyStroke(
+            keyCode: 45,
+            flags: UInt64(1 << 20)
+        )
+        case "codex-open-terminal": .keyStroke(keyCode: 50, flags: UInt64(1 << 18))
+        case "codex-toggle-file-tree": .keyStroke(
+            keyCode: 14,
+            flags: UInt64((1 << 20) | (1 << 17))
+        )
+        case "codex-toggle-review": .keyStroke(
+            keyCode: 11,
+            flags: UInt64((1 << 20) | (1 << 19))
+        )
+        case "codex-previous-chat": .keyStroke(
+            keyCode: 33,
+            flags: UInt64((1 << 20) | (1 << 17))
+        )
+        case "codex-next-chat": .keyStroke(
+            keyCode: 30,
+            flags: UInt64((1 << 20) | (1 << 17))
+        )
         case "smart-focus": .sequence([
             .openApplication(bundleIdentifier: "com.apple.iCal"),
             .openApplication(bundleIdentifier: "com.apple.Notes"),

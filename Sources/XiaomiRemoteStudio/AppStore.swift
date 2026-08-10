@@ -91,6 +91,7 @@ final class AppStore: ObservableObject {
     private var hasScheduledAutomaticUpdateCheck = false
     private var lastBatteryRefreshDate: Date?
     private var lowBatteryWarningIssued = false
+    private var remoteVoiceReportCount = 0
     private let runtimeServicesEnabled: Bool
     private let actionsRingOverlayController = ActionsRingOverlayController()
 
@@ -154,6 +155,13 @@ final class AppStore: ObservableObject {
             guard self.showsFeatureOverview, isDown else { return }
             self.unknownPhysicalUsages.insert(usage)
             self.lastUnknownPhysicalUsageDate = Date()
+        }
+        coordinator.onVoiceReport = { [weak self] report in
+            guard let self, remoteIsManaged else { return }
+            remoteVoiceReportCount += 1
+            if remoteVoiceReportCount == 1 || remoteVoiceReportCount.isMultiple(of: 50) {
+                backendLog = "收到遥控器麦克风数据 · 报告 \(report.reportID) · \(report.bytes.count) 字节"
+            }
         }
         coordinator.onConnectionChanged = { [weak self] connected in
             guard let self, self.remoteIsManaged else { return }
@@ -1118,6 +1126,79 @@ final class AppStore: ObservableObject {
         }
         selectProfile(profile)
         showToast("已添加 \(profile.title) Profile")
+    }
+
+    /// Installs a remote-first Codex/Claude layout for hands-free coding.
+    /// Unrelated global buttons stay untouched so the preset is safe to apply
+    /// over an existing device configuration.
+    func installAIVibeCodingPreset() {
+        let codexID = "com.openai.codex"
+        let claudeID = "com.anthropic.claudefordesktop"
+
+        for profileID in [codexID, claudeID] {
+            removedProfileIDs.remove(profileID)
+            if let profile = AppProfile.profiles.first(where: { $0.id == profileID }),
+               !profiles.contains(where: { $0.id == profileID }) {
+                profiles.append(profile)
+            }
+        }
+
+        assignmentsByProfile["global", default: [:]]["power"] = "open-codex"
+        assignmentsByProfile["global", default: [:]]["voice"] = "voice-codex"
+        doubleTapAssignmentsByProfile["global", default: [:]]["power"] = "open-claude"
+        doubleTapAssignmentsByProfile["global", default: [:]]["voice"] = "voice-claude"
+
+        assignmentsByProfile[codexID] = [
+            "power": "open-codex",
+            "voice": "start-dictation",
+            "left": "codex-previous-chat",
+            "right": "codex-next-chat",
+            "ok": "ai-submit",
+            "back": "ai-cancel",
+            "home": "codex-new-chat",
+            "menu": "show-actions-ring",
+            "tv": "codex-open-terminal"
+        ]
+        doubleTapAssignmentsByProfile[codexID, default: [:]]["power"] = "open-claude"
+
+        assignmentsByProfile[claudeID] = [
+            "power": "open-claude",
+            "voice": "start-dictation",
+            "ok": "ai-submit",
+            "back": "ai-cancel",
+            "home": "claude-new-conversation",
+            "menu": "show-actions-ring",
+            "tv": "ai-attach-file"
+        ]
+        doubleTapAssignmentsByProfile[claudeID, default: [:]]["power"] = "open-codex"
+
+        actionsRingAssignmentsByProfile[codexID] = [
+            "voice-codex",
+            "codex-new-chat",
+            "ai-submit",
+            "codex-open-terminal",
+            "codex-toggle-file-tree",
+            "codex-toggle-review",
+            "codex-previous-chat",
+            "codex-next-chat"
+        ]
+        actionsRingAssignmentsByProfile[claudeID] = [
+            "voice-claude",
+            "claude-new-conversation",
+            "ai-submit",
+            "ai-newline",
+            "ai-attach-file",
+            "copy",
+            "paste",
+            "ai-cancel"
+        ]
+        if selectedActionsRingProfileID == codexID || selectedActionsRingProfileID == claudeID {
+            actionsRingActionIDs = actionsRingAssignmentsByProfile[selectedActionsRingProfileID]
+                ?? AppStore.defaultActionsRingActionIDs
+        }
+
+        persistConfiguration()
+        showToast("已安装 Codex / Claude 躺平编程预设")
     }
 
     func removeApplicationProfile(_ profile: AppProfile) {

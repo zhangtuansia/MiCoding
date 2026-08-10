@@ -154,6 +154,9 @@ struct RemoteAction: Identifiable, Hashable {
         case "launch-notes": "新建备忘录"
         case "explore-ai": "探索 AI"
         case "launch-micoding": "打开 MiCoding"
+        case "open-codex": "打开 Codex"
+        case "open-claude": "打开 Claude"
+        case "start-dictation": "开始语音输入"
         default: title
         }
     }
@@ -198,6 +201,22 @@ struct RemoteAction: Identifiable, Hashable {
         .init(id: "launch-notes", title: "New Note", subtitle: "在备忘录中创建空白笔记", symbol: "square.and.pencil", category: .apps, tint: .yellow),
         .init(id: "explore-ai", title: "Explore AI", subtitle: "打开 AI 助手", symbol: "sparkles", category: .recommended, tint: .purple),
         .init(id: "launch-micoding", title: "MiCoding App", subtitle: "将 MiCoding 置于前台", symbol: "mouse", category: .apps, tint: .purple),
+        .init(id: "open-codex", title: "打开 Codex", subtitle: "将 Codex 置于前台", symbol: "terminal", category: .apps, tint: .blue),
+        .init(id: "open-claude", title: "打开 Claude", subtitle: "将 Claude 置于前台", symbol: "sparkles", category: .apps, tint: .orange),
+        .init(id: "start-dictation", title: "开始语音输入", subtitle: "直接启动当前应用的系统听写", symbol: "mic.fill", category: .recommended, tint: .purple),
+        .init(id: "voice-codex", title: "语音问 Codex", subtitle: "打开 Codex 并立即开始听写", symbol: "mic.fill", category: .recommended, tint: .blue),
+        .init(id: "voice-claude", title: "语音问 Claude", subtitle: "打开 Claude 并立即开始听写", symbol: "mic.fill", category: .recommended, tint: .orange),
+        .init(id: "ai-submit", title: "发送给 AI", subtitle: "发送当前提示词", symbol: "return", category: .recommended, tint: .green),
+        .init(id: "ai-newline", title: "AI 换行", subtitle: "在提示词中插入新行", symbol: "return", category: .shortcut, tint: .gray),
+        .init(id: "ai-cancel", title: "取消 / 停止", subtitle: "取消弹窗或停止当前操作", symbol: "escape", category: .recommended, tint: .red),
+        .init(id: "ai-attach-file", title: "添加文件", subtitle: "打开 AI 应用的文件选择器", symbol: "paperclip", category: .shortcut, tint: .indigo),
+        .init(id: "codex-new-chat", title: "Codex 新任务", subtitle: "新建 Codex 对话", symbol: "square.and.pencil", category: .shortcut, tint: .blue),
+        .init(id: "claude-new-conversation", title: "Claude 新对话", subtitle: "新建 Claude 对话", symbol: "square.and.pencil", category: .shortcut, tint: .orange),
+        .init(id: "codex-open-terminal", title: "Codex 终端", subtitle: "打开或关闭 Codex 终端", symbol: "terminal", category: .shortcut, tint: .gray),
+        .init(id: "codex-toggle-file-tree", title: "Codex 文件树", subtitle: "打开或关闭文件树", symbol: "folder", category: .shortcut, tint: .blue),
+        .init(id: "codex-toggle-review", title: "Codex 审查", subtitle: "打开或关闭代码审查", symbol: "magnifyingglass", category: .shortcut, tint: .purple),
+        .init(id: "codex-previous-chat", title: "上一个 Codex 任务", subtitle: "切换到上一个任务", symbol: "chevron.left", category: .shortcut, tint: .blue),
+        .init(id: "codex-next-chat", title: "下一个 Codex 任务", subtitle: "切换到下一个任务", symbol: "chevron.right", category: .shortcut, tint: .blue),
         .init(id: "smart-focus", title: "办公模式", subtitle: "打开日历、备忘录和浏览器", symbol: "moon.stars.fill", category: .shortcut, tint: .indigo),
         .init(id: "smart-meeting", title: "会议模式", subtitle: "日历、FaceTime 与静音", symbol: "video.fill", category: .shortcut, tint: .blue),
         .init(id: "smart-note", title: "休憩时刻", subtitle: "打开音乐和 YouTube", symbol: "square.and.pencil", category: .shortcut, tint: .orange),
@@ -302,6 +321,22 @@ struct AppProfile: Identifiable, Hashable {
             symbol: "video.fill",
             tint: .blue,
             bundleIdentifier: "com.tencent.meeting"
+        ),
+        .init(
+            id: "com.openai.codex",
+            title: "Codex",
+            subtitle: "AI 编程",
+            symbol: "terminal",
+            tint: .blue,
+            bundleIdentifier: "com.openai.codex"
+        ),
+        .init(
+            id: "com.anthropic.claudefordesktop",
+            title: "Claude",
+            subtitle: "AI 助手",
+            symbol: "sparkles",
+            tint: .orange,
+            bundleIdentifier: "com.anthropic.claudefordesktop"
         )
     ]
 }

@@ -16,8 +16,15 @@ struct RemoteInputEvent: Sendable {
     let timestamp: Date
 }
 
+struct RemoteVoiceReport: Equatable, Sendable {
+    let reportID: UInt32
+    let bytes: [UInt8]
+    let timestamp: Date
+}
+
 protocol RemoteInputServicing: AnyObject {
     var onEvent: ((RemoteInputEvent) -> Void)? { get set }
+    var onVoiceReport: ((RemoteVoiceReport) -> Void)? { get set }
     var onConnectionChanged: ((Bool) -> Void)? { get set }
     var onUnknownUsage: ((UInt32, Bool) -> Void)? { get set }
     func start() throws
@@ -42,6 +49,7 @@ enum RemoteInputServiceError: LocalizedError {
 /// and UI feedback still work when that routing layer is disabled.
 final class IOHIDRemoteInputService: RemoteInputServicing, @unchecked Sendable {
     var onEvent: ((RemoteInputEvent) -> Void)?
+    var onVoiceReport: ((RemoteVoiceReport) -> Void)?
     var onConnectionChanged: ((Bool) -> Void)?
     var onUnknownUsage: ((UInt32, Bool) -> Void)?
 
@@ -51,6 +59,7 @@ final class IOHIDRemoteInputService: RemoteInputServicing, @unchecked Sendable {
     private var reportUsages: Set<UInt32> = []
     private var reportFlushScheduled = false
     private var rawReportsObserved = false
+    private var voiceReportCount = 0
     private var stateTracker = RemoteHIDStateTracker()
     private var isConnected = false
 
@@ -124,6 +133,7 @@ final class IOHIDRemoteInputService: RemoteInputServicing, @unchecked Sendable {
         reportUsages.removeAll()
         reportFlushScheduled = false
         rawReportsObserved = false
+        voiceReportCount = 0
         stateTracker.reset()
         reportConnectionChange(false)
     }
@@ -192,6 +202,26 @@ final class IOHIDRemoteInputService: RemoteInputServicing, @unchecked Sendable {
               reportLength > 0 else { return }
 
         let bytes = Array(UnsafeBufferPointer(start: report, count: reportLength))
+
+        // Reports 6-8 are the three audio-data channels declared by the
+        // remote's vendor HID descriptor. Keep a bounded sample in the unified
+        // log so the physical remote can be calibrated without flooding the
+        // process with its 16 kHz voice stream.
+        if (6...8).contains(reportID) {
+            voiceReportCount += 1
+            onVoiceReport?(
+                RemoteVoiceReport(reportID: reportID, bytes: bytes, timestamp: Date())
+            )
+            if voiceReportCount <= 12 || voiceReportCount.isMultiple(of: 50) {
+                let byteText = bytes.prefix(20)
+                    .map { String(format: "%02X", $0) }
+                    .joined(separator: " ")
+                hidLogger.info(
+                    "voice report #\(self.voiceReportCount) id=\(reportID) bytes=[\(byteText, privacy: .public)] length=\(reportLength)"
+                )
+            }
+            return
+        }
 
         // Keep report-ID 1 observable even when a firmware variant does not
         // match the parser below. Physical button presses are infrequent, so
@@ -372,6 +402,7 @@ struct RemoteHIDStateTracker: Sendable {
 
 final class PreviewRemoteInputService: RemoteInputServicing {
     var onEvent: ((RemoteInputEvent) -> Void)?
+    var onVoiceReport: ((RemoteVoiceReport) -> Void)?
     var onConnectionChanged: ((Bool) -> Void)?
     var onUnknownUsage: ((UInt32, Bool) -> Void)?
 
