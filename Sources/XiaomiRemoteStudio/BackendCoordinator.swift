@@ -131,6 +131,24 @@ final class BackendCoordinator {
                 self?.routeInputEvent(event)
             }
         }
+        keyRemapper?.shouldPassThrough = { [weak self] key in
+            guard let self, key == .voice else { return false }
+            return self.resolveActionID?(
+                self.activeBundleIdentifier,
+                key.slotID,
+                .tap
+            ) == "typeless-dictation"
+                && self.resolveActionID?(
+                    self.activeBundleIdentifier,
+                    key.slotID,
+                    .hold
+                ) == nil
+                && self.resolveActionID?(
+                    self.activeBundleIdentifier,
+                    key.slotID,
+                    .doubleTap
+                ) == nil
+        }
         inputService.onEvent = { [weak self] event in
             Task { @MainActor in
                 guard let self else { return }
@@ -198,6 +216,12 @@ final class BackendCoordinator {
                     resolved.slotID,
                     resolved.trigger
                   ) else {
+                return
+            }
+            if resolved.slotID == RemotePhysicalKey.voice.slotID,
+               resolved.trigger == .tap,
+               actionID == "typeless-dictation" {
+                self.onLog?("执行 voice.tap → typeless-dictation（硬件 F20）")
                 return
             }
             self.execute(

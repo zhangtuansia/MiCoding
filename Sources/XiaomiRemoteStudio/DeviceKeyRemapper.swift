@@ -4,6 +4,7 @@ import Foundation
 protocol DeviceKeyRemapping: AnyObject {
     var onLog: ((String) -> Void)? { get set }
     var onEvent: ((RemoteInputEvent) -> Void)? { get set }
+    var shouldPassThrough: ((RemotePhysicalKey) -> Bool)? { get set }
     var activeRemappedSlotIDs: Set<String> { get }
     @discardableResult func install() -> Bool
     func uninstall()
@@ -37,12 +38,12 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
         Relay(sourceUsage: 0x66, destinationUsage: 0x6C, keyCode: 64, key: .power),
         Relay(sourceUsage: 0x28, destinationUsage: 0x6D, keyCode: 79, key: .ok),
         Relay(sourceUsage: 0x52, destinationUsage: 0x6E, keyCode: 80, key: .up),
-        Relay(sourceUsage: 0x51, destinationUsage: 0x6F, keyCode: 90, key: .down),
+        Relay(sourceUsage: 0x51, destinationUsage: 0x67, keyCode: 81, key: .down),
         Relay(sourceUsage: 0x50, destinationUsage: 0x68, keyCode: 105, key: .left),
         Relay(sourceUsage: 0x4F, destinationUsage: 0x53, keyCode: 71, key: .right),
         Relay(sourceUsage: 0x80, destinationUsage: 0x54, keyCode: 75, key: .volumeUp),
         Relay(sourceUsage: 0x81, destinationUsage: 0x55, keyCode: 67, key: .volumeDown),
-        Relay(sourceUsage: 0x3E, destinationUsage: 0x56, keyCode: 78, key: .voice)
+        Relay(sourceUsage: 0x3E, destinationUsage: 0x6F, keyCode: 90, key: .voice)
     ]
 
     private static let relayByKeyCode = Dictionary(
@@ -64,6 +65,7 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
 
     var onLog: ((String) -> Void)?
     var onEvent: ((RemoteInputEvent) -> Void)?
+    var shouldPassThrough: ((RemotePhysicalKey) -> Bool)?
     var activeRemappedSlotIDs: Set<String> {
         isInstalled ? Self.relayedSlotIDs : []
     }
@@ -332,15 +334,21 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
             return nil
         }
 
-        onEvent?(
-            RemoteInputEvent(
-                deviceID: RemoteDevice.remote2Pro.id,
-                slotID: key.slotID,
-                phase: type == .keyDown ? .began : .ended,
-                timestamp: Date()
-            )
+        let remoteEvent = RemoteInputEvent(
+            deviceID: RemoteDevice.remote2Pro.id,
+            slotID: key.slotID,
+            phase: type == .keyDown ? .began : .ended,
+            timestamp: Date()
         )
-        return nil
+        onEvent?(remoteEvent)
+
+        // Typeless intentionally rejects software-generated CGEvents. When
+        // its dedicated remote action is active, keep the relayed F20 event in
+        // the HID stream so Typeless receives a real external-keyboard press.
+        // Every other relay remains consumed exactly as before.
+        return shouldPassThrough?(key) == true
+            ? Unmanaged.passUnretained(event)
+            : nil
     }
 
     private static let eventTapCallback: CGEventTapCallBack = {

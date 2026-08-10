@@ -1144,13 +1144,14 @@ final class AppStore: ObservableObject {
         }
 
         assignmentsByProfile["global", default: [:]]["power"] = "open-codex"
-        assignmentsByProfile["global", default: [:]]["voice"] = "voice-codex"
+        assignmentsByProfile["global", default: [:]]["voice"] = "typeless-dictation"
         doubleTapAssignmentsByProfile["global", default: [:]]["power"] = "open-claude"
-        doubleTapAssignmentsByProfile["global", default: [:]]["voice"] = "voice-claude"
+        doubleTapAssignmentsByProfile["global", default: [:]]["voice"] = nil
+        holdAssignmentsByProfile["global", default: [:]]["voice"] = nil
 
         assignmentsByProfile[codexID] = [
             "power": "open-codex",
-            "voice": "start-dictation",
+            "voice": "typeless-dictation",
             "left": "codex-previous-chat",
             "right": "codex-next-chat",
             "ok": "ai-submit",
@@ -1160,10 +1161,12 @@ final class AppStore: ObservableObject {
             "tv": "codex-open-terminal"
         ]
         doubleTapAssignmentsByProfile[codexID, default: [:]]["power"] = "open-claude"
+        doubleTapAssignmentsByProfile[codexID, default: [:]]["voice"] = nil
+        holdAssignmentsByProfile[codexID, default: [:]]["voice"] = nil
 
         assignmentsByProfile[claudeID] = [
             "power": "open-claude",
-            "voice": "start-dictation",
+            "voice": "typeless-dictation",
             "ok": "ai-submit",
             "back": "ai-cancel",
             "home": "claude-new-conversation",
@@ -1171,9 +1174,11 @@ final class AppStore: ObservableObject {
             "tv": "ai-attach-file"
         ]
         doubleTapAssignmentsByProfile[claudeID, default: [:]]["power"] = "open-codex"
+        doubleTapAssignmentsByProfile[claudeID, default: [:]]["voice"] = nil
+        holdAssignmentsByProfile[claudeID, default: [:]]["voice"] = nil
 
         actionsRingAssignmentsByProfile[codexID] = [
-            "voice-codex",
+            "ai-attach-file",
             "codex-new-chat",
             "ai-submit",
             "codex-open-terminal",
@@ -1183,7 +1188,7 @@ final class AppStore: ObservableObject {
             "codex-next-chat"
         ]
         actionsRingAssignmentsByProfile[claudeID] = [
-            "voice-claude",
+            "open-codex",
             "claude-new-conversation",
             "ai-submit",
             "ai-newline",

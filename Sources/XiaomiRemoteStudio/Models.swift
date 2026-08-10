@@ -157,6 +157,7 @@ struct RemoteAction: Identifiable, Hashable {
         case "open-codex": "打开 Codex"
         case "open-claude": "打开 Claude"
         case "start-dictation": "开始语音输入"
+        case "typeless-dictation": "Typeless 语音输入"
         default: title
         }
     }
@@ -204,8 +205,9 @@ struct RemoteAction: Identifiable, Hashable {
         .init(id: "open-codex", title: "打开 Codex", subtitle: "将 Codex 置于前台", symbol: "terminal", category: .apps, tint: .blue),
         .init(id: "open-claude", title: "打开 Claude", subtitle: "将 Claude 置于前台", symbol: "sparkles", category: .apps, tint: .orange),
         .init(id: "start-dictation", title: "开始语音输入", subtitle: "直接启动当前应用的系统听写", symbol: "mic.fill", category: .recommended, tint: .purple),
-        .init(id: "voice-codex", title: "语音问 Codex", subtitle: "打开 Codex 并立即开始听写", symbol: "mic.fill", category: .recommended, tint: .blue),
-        .init(id: "voice-claude", title: "语音问 Claude", subtitle: "打开 Claude 并立即开始听写", symbol: "mic.fill", category: .recommended, tint: .orange),
+        .init(id: "typeless-dictation", title: "Typeless 语音输入", subtitle: "遥控器语音键专用 · 硬件 F20", symbol: "mic.fill", category: .recommended, tint: .purple),
+        .init(id: "voice-codex", title: "语音问 Codex", subtitle: "打开 Codex 并启动系统听写", symbol: "mic.fill", category: .recommended, tint: .blue),
+        .init(id: "voice-claude", title: "语音问 Claude", subtitle: "打开 Claude 并启动系统听写", symbol: "mic.fill", category: .recommended, tint: .orange),
         .init(id: "ai-submit", title: "发送给 AI", subtitle: "发送当前提示词", symbol: "return", category: .recommended, tint: .green),
         .init(id: "ai-newline", title: "AI 换行", subtitle: "在提示词中插入新行", symbol: "return", category: .shortcut, tint: .gray),
         .init(id: "ai-cancel", title: "取消 / 停止", subtitle: "取消弹窗或停止当前操作", symbol: "escape", category: .recommended, tint: .red),

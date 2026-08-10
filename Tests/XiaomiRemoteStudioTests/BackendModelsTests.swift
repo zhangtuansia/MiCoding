@@ -799,8 +799,12 @@ final class BackendModelsTests: XCTestCase {
             .ok
         )
         XCTAssertEqual(
-            DeviceKeyRemapper.physicalKey(forRelayKeyCode: 78),
+            DeviceKeyRemapper.physicalKey(forRelayKeyCode: 90),
             .voice
+        )
+        XCTAssertEqual(
+            DeviceKeyRemapper.physicalKey(forRelayKeyCode: 81),
+            .down
         )
     }
 
@@ -1118,11 +1122,11 @@ final class BackendModelsTests: XCTestCase {
         store.installAIVibeCodingPreset()
 
         XCTAssertEqual(store.assignmentsByProfile["global"]?["power"], "open-codex")
-        XCTAssertEqual(store.assignmentsByProfile["global"]?["voice"], "voice-codex")
+        XCTAssertEqual(store.assignmentsByProfile["global"]?["voice"], "typeless-dictation")
         XCTAssertEqual(store.assignmentsByProfile["global"]?["menu"], "screenshot")
         XCTAssertEqual(
             store.assignmentsByProfile["com.openai.codex"]?["voice"],
-            "start-dictation"
+            "typeless-dictation"
         )
         XCTAssertEqual(
             store.assignmentsByProfile["com.anthropic.claudefordesktop"]?["home"],
@@ -1131,7 +1135,7 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(
             store.actionsRingAssignmentsByProfile["com.openai.codex"],
             [
-                "voice-codex",
+                "ai-attach-file",
                 "codex-new-chat",
                 "ai-submit",
                 "codex-open-terminal",
@@ -1155,7 +1159,7 @@ final class BackendModelsTests: XCTestCase {
             restored.profiles.first(where: { $0.id == "com.openai.codex" })
         )
         restored.selectProfile(codexProfile)
-        XCTAssertEqual(restored.action(for: "voice", trigger: .tap)?.id, "start-dictation")
+        XCTAssertEqual(restored.action(for: "voice", trigger: .tap)?.id, "typeless-dictation")
         XCTAssertEqual(restored.action(for: "power", trigger: .doubleTap)?.id, "open-claude")
     }
 
@@ -1893,6 +1897,10 @@ final class BackendModelsTests: XCTestCase {
             ])
         )
         XCTAssertEqual(
+            ActionCommand.command(for: "typeless-dictation"),
+            .hardwareKeyPassThrough
+        )
+        XCTAssertEqual(
             ActionCommand.command(for: "codex-open-terminal"),
             .keyStroke(keyCode: 50, flags: UInt64(1 << 18))
         )
@@ -2513,6 +2521,49 @@ final class BackendModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testTypelessVoiceBindingPassesThroughHardwareWithoutDoubleExecution() async {
+        let input = PreviewRemoteInputService()
+        let remapper = RecordingDeviceKeyRemapper()
+        let executor = RecordingActionExecutor()
+        let coordinator = BackendCoordinator(
+            inputService: input,
+            executor: executor,
+            keyRemapper: remapper
+        )
+        var includesAlternateGesture = false
+        coordinator.resolveActionID = { _, slotID, trigger in
+            guard slotID == RemotePhysicalKey.voice.slotID else { return nil }
+            if trigger == .tap { return "typeless-dictation" }
+            return includesAlternateGesture && trigger == .hold ? "copy" : nil
+        }
+
+        XCTAssertTrue(remapper.shouldPassThrough?(.voice) == true)
+        XCTAssertFalse(remapper.shouldPassThrough?(.ok) == true)
+
+        remapper.onEvent?(
+            RemoteInputEvent(
+                deviceID: RemoteDevice.remote2Pro.id,
+                slotID: RemotePhysicalKey.voice.slotID,
+                phase: .began,
+                timestamp: Date()
+            )
+        )
+        remapper.onEvent?(
+            RemoteInputEvent(
+                deviceID: RemoteDevice.remote2Pro.id,
+                slotID: RemotePhysicalKey.voice.slotID,
+                phase: .ended,
+                timestamp: Date()
+            )
+        )
+        await Task.yield()
+        XCTAssertTrue(executor.commands.isEmpty)
+
+        includesAlternateGesture = true
+        XCTAssertFalse(remapper.shouldPassThrough?(.voice) == true)
+    }
+
+    @MainActor
     func testSettingsReturnsToTheOriginatingSection() {
         let store = AppStore()
         store.selectSection(.automations)
@@ -3089,6 +3140,7 @@ private final class RecordingActionExecutor: ActionExecuting {
 private final class RecordingDeviceKeyRemapper: DeviceKeyRemapping {
     var onLog: ((String) -> Void)?
     var onEvent: ((RemoteInputEvent) -> Void)?
+    var shouldPassThrough: ((RemotePhysicalKey) -> Bool)?
     var activeRemappedSlotIDs: Set<String> = []
     private(set) var installCount = 0
     private(set) var uninstallCount = 0

@@ -42,6 +42,8 @@ final class SystemActionExecutor: ActionExecuting {
             try? await Task.sleep(for: .milliseconds(max(0, milliseconds)))
         case .startDictation:
             await startDictation()
+        case .hardwareKeyPassThrough:
+            break
         case .showActionsRing:
             NotificationCenter.default.post(name: .showActionsRingRequested, object: nil)
         case .sequence(let commands):
@@ -113,6 +115,12 @@ final class SystemActionExecutor: ActionExecuting {
     }
 
     private func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags) {
+        if let modifierFlag = modifierFlag(for: keyCode),
+           flags.contains(modifierFlag),
+           flags.subtracting(modifierFlag).isEmpty {
+            postModifierTap(keyCode: keyCode, flag: modifierFlag)
+            return
+        }
         let source = CGEventSource(stateID: .combinedSessionState)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
@@ -124,6 +132,44 @@ final class SystemActionExecutor: ActionExecuting {
         up.setIntegerValueField(.eventSourceUserData, value: miCodingSyntheticEventMarker)
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
+    }
+
+    private func modifierFlag(for keyCode: CGKeyCode) -> CGEventFlags? {
+        switch keyCode {
+        case 63: .maskSecondaryFn
+        case 59, 62: .maskControl
+        case 56, 60: .maskShift
+        case 58, 61: .maskAlternate
+        case 54, 55: .maskCommand
+        default: nil
+        }
+    }
+
+    /// Modifier-only shortcuts arrive as `flagsChanged` events on real
+    /// keyboards. Posting a regular keyDown/keyUp pair (and leaving the flag
+    /// set on keyUp) is why recorded fn shortcuts were visible in MiCoding but
+    /// ignored by apps that monitor modifiers directly.
+    private func postModifierTap(keyCode: CGKeyCode, flag: CGEventFlags) {
+        let source = CGEventSource(stateID: .hidSystemState)
+        postModifierEvent(keyCode: keyCode, isDown: true, flags: flag, source: source)
+        postModifierEvent(keyCode: keyCode, isDown: false, flags: [], source: source)
+    }
+
+    private func postModifierEvent(
+        keyCode: CGKeyCode,
+        isDown: Bool,
+        flags: CGEventFlags,
+        source: CGEventSource?
+    ) {
+        guard let event = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: keyCode,
+            keyDown: isDown
+        ) else { return }
+        event.type = .flagsChanged
+        event.flags = flags
+        event.setIntegerValueField(.eventSourceUserData, value: miCodingSyntheticEventMarker)
+        event.post(tap: .cghidEventTap)
     }
 
     private func postAuxiliaryKey(type: Int32) {

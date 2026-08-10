@@ -134,6 +134,7 @@ indirect enum ActionCommand: Codable, Equatable, Sendable {
     case typeText(String)
     case delay(milliseconds: Int)
     case startDictation
+    case hardwareKeyPassThrough
     case showActionsRing
     case sequence([ActionCommand])
     case none
@@ -193,6 +194,7 @@ indirect enum ActionCommand: Codable, Equatable, Sendable {
         case "open-codex": .openApplication(bundleIdentifier: "com.openai.codex")
         case "open-claude": .openApplication(bundleIdentifier: "com.anthropic.claudefordesktop")
         case "start-dictation": .startDictation
+        case "typeless-dictation": .hardwareKeyPassThrough
         case "voice-codex": .sequence([
             .openApplication(bundleIdentifier: "com.openai.codex"),
             .delay(milliseconds: 650),
