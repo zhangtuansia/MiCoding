@@ -248,35 +248,53 @@ private struct ExploreActionsRingArtwork: View {
     var body: some View {
         GeometryReader { proxy in
             let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2 + 5)
-            let radius: CGFloat = 26
 
             ZStack {
                 ForEach(symbols.indices, id: \.self) { index in
-                    let angle = Double(index) / Double(symbols.count) * Double.pi * 2 - Double.pi / 2
-                    Circle()
-                        .fill(Color.black.opacity(0.92))
-                        .frame(width: 17, height: 17)
-                        .overlay {
-                            AppIcon(symbol: symbols[index], size: 9)
-                                .foregroundStyle(.white)
-                        }
-                        .position(
-                            x: center.x + cos(angle) * radius,
-                            y: center.y + sin(angle) * radius
-                        )
+                    ExploreActionsRingItem(symbol: symbols[index])
+                        .position(itemPosition(at: index, center: center))
                 }
 
-                Circle()
-                    .fill(AppTheme.purple)
-                    .frame(width: 15, height: 15)
-                    .overlay {
-                        AppIcon(symbol: "sparkles", size: 8)
-                            .foregroundStyle(.white)
-                    }
+                ExploreActionsRingCenter()
                     .position(center)
             }
         }
         .accessibilityHidden(true)
+    }
+
+    private func itemPosition(at index: Int, center: CGPoint) -> CGPoint {
+        let angle = Double(index) / Double(symbols.count) * Double.pi * 2 - Double.pi / 2
+        let radius: CGFloat = 26
+        return CGPoint(
+            x: center.x + cos(angle) * radius,
+            y: center.y + sin(angle) * radius
+        )
+    }
+}
+
+private struct ExploreActionsRingItem: View {
+    let symbol: String
+
+    var body: some View {
+        Circle()
+            .fill(Color.black.opacity(0.92))
+            .frame(width: 17, height: 17)
+            .overlay {
+                AppIcon(symbol: symbol, size: 9)
+                    .foregroundStyle(.white)
+            }
+    }
+}
+
+private struct ExploreActionsRingCenter: View {
+    var body: some View {
+        Circle()
+            .fill(AppTheme.purple)
+            .frame(width: 15, height: 15)
+            .overlay {
+                AppIcon(symbol: "sparkles", size: 8)
+                    .foregroundStyle(.white)
+            }
     }
 }
 

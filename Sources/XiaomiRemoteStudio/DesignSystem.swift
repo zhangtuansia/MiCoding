@@ -622,31 +622,39 @@ struct PermissionRecoveryBanner: View {
         !store.permissions.inputMonitoringGranted
     }
 
+    private var title: String {
+        needsInputMonitoring ? "输入监控未开启" : "辅助功能未开启"
+    }
+
+    private var detail: String {
+        needsInputMonitoring
+            ? "MiCoding 暂时无法接收遥控器按键。"
+            : "快捷键、媒体键与窗口操作暂时不可用。"
+    }
+
     var body: some View {
-        HStack(spacing: 13) {
-            IconTile(
-                symbol: needsInputMonitoring ? "dot.radiowaves.left.and.right" : "lock.shield.fill",
-                tint: AppTheme.warning,
-                size: 32
+        HStack(spacing: 12) {
+            AppIcon(
+                symbol: needsInputMonitoring ? "keyboard" : "lock.shield.fill",
+                size: AppIconSize.row
             )
+            .foregroundStyle(AppTheme.warning)
+            .frame(width: 24, height: 24)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(needsInputMonitoring ? "允许读取遥控器按键" : "允许执行系统操作")
-                    .font(AppTypography.label)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(AppTypography.bodyMedium)
+                    .foregroundStyle(Color.primary)
 
-                Text(
-                    needsInputMonitoring
-                        ? "设备可以显示为已连接，但没有输入监控权限时按键不会进入 MiCoding。"
-                        : "快捷键、媒体键和窗口操作需要 macOS 辅助功能权限。"
-                )
-                .font(AppTypography.supporting)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+                Text(detail)
+                    .font(AppTypography.supporting)
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(1)
             }
 
-            Spacer(minLength: 16)
+            Spacer(minLength: 12)
 
-            Button("打开权限设置") {
+            Button {
                 if needsInputMonitoring {
                     store.requestInputMonitoringPermission()
                     store.openInputMonitoringSettings()
@@ -654,28 +662,43 @@ struct PermissionRecoveryBanner: View {
                     store.requestAccessibilityPermission()
                     store.openAccessibilitySettings()
                 }
+            } label: {
+                Text("打开设置")
+                    .font(AppTypography.bodyMedium)
+                    .foregroundStyle(Color.primary.opacity(0.90))
+                    .padding(.horizontal, 10)
+                    .frame(height: AppMetrics.inlineActionHeight)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(SecondaryActionButtonStyle())
+            .buttonStyle(QuietButtonStyle())
+            .help("打开 macOS 权限设置")
 
             Button {
                 store.setPermissionReminders(false)
             } label: {
                 AppIcon(symbol: "xmark", size: AppIconSize.indicator)
-                    .foregroundStyle(Color.secondary)
-                    .frame(width: 20, height: 20)
+                    .foregroundStyle(Color.secondary.opacity(0.82))
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(QuietButtonStyle())
             .help("关闭权限提醒")
+            .accessibilityLabel("关闭权限提醒")
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 56)
-        .background(AppTheme.warning.opacity(colorScheme == .dark ? 0.10 : 0.07))
-        .clipShape(RoundedRectangle(cornerRadius: AppMetrics.radiusControl, style: .continuous))
+        .padding(.horizontal, 14)
+        .frame(height: 60)
+        .background(AppTheme.primarySurface(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: AppMetrics.radiusSmall, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: AppMetrics.radiusControl, style: .continuous)
-                .stroke(AppTheme.warning.opacity(0.24), lineWidth: 1)
+            RoundedRectangle(cornerRadius: AppMetrics.radiusSmall, style: .continuous)
+                .stroke(AppTheme.separator(for: colorScheme), lineWidth: 1)
         }
+        .shadow(
+            color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.055),
+            radius: 12,
+            y: 5
+        )
+        .accessibilityElement(children: .contain)
     }
 }
 

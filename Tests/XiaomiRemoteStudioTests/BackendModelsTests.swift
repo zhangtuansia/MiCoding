@@ -2265,21 +2265,23 @@ final class BackendModelsTests: XCTestCase {
     }
 
     func testModelAndInterfaceSymbolsResolveToLucideIcons() {
-        let symbols =
-            AppSection.allCases.map(\.icon)
-            + DevicePanel.allCases.map(\.symbol)
-            + RemoteButtonSlot.demoSlots.map(\.symbol)
-            + RemoteAction.catalog.map(\.symbol)
-            + AppProfile.profiles.map(\.symbol)
-            + SmartAction.samples.map(\.symbol)
-            + [
-                SmartActionStep.application(bundleIdentifier: "test", name: "Test"),
-                .keystroke(keyCode: 36, flags: 0, name: "Return"),
-                .text("Text"),
-                .url("https://example.com"),
-                .delay(milliseconds: 1_000)
-            ].map(\.symbol)
-            + Array(AppIconRegistry.interfaceSymbols)
+        var symbols: [String] = []
+        symbols.append(contentsOf: AppSection.allCases.map(\.icon))
+        symbols.append(contentsOf: DevicePanel.allCases.map(\.symbol))
+        symbols.append(contentsOf: RemoteButtonSlot.demoSlots.map(\.symbol))
+        symbols.append(contentsOf: RemoteAction.catalog.map(\.symbol))
+        symbols.append(contentsOf: AppProfile.profiles.map(\.symbol))
+        symbols.append(contentsOf: SmartAction.samples.map(\.symbol))
+
+        let representativeSteps: [SmartActionStep] = [
+            .application(bundleIdentifier: "test", name: "Test"),
+            .keystroke(keyCode: 36, flags: 0, name: "Return"),
+            .text("Text"),
+            .url("https://example.com"),
+            .delay(milliseconds: 1_000)
+        ]
+        symbols.append(contentsOf: representativeSteps.map(\.symbol))
+        symbols.append(contentsOf: AppIconRegistry.interfaceSymbols)
 
         for symbol in Set(symbols) {
             XCTAssertTrue(
@@ -2637,6 +2639,41 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(RemoteCanvasMetrics.calloutColumnWidth, 180)
         XCTAssertEqual(RemoteCanvasMetrics.calloutInnerGap, 88)
         XCTAssertEqual(DeviceDetailLayoutMetrics.profileIconOpticalYOffset, 0)
+    }
+
+    func testPerspectiveHotspotsFollowTheRenderedHardwarePlane() throws {
+        let power = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "power" }))
+        let up = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "up" }))
+        let left = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "left" }))
+        let down = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "down" }))
+        let menu = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "menu" }))
+
+        let powerPoint = PerspectiveHotspotPlacement.point(for: power)
+        XCTAssertEqual(powerPoint.x * 388, 83, accuracy: 0.001)
+        XCTAssertEqual(powerPoint.y * 1_556, 150, accuracy: 0.001)
+
+        let upTarget = PerspectiveHotspotPlacement.targetPoint(for: up)
+        let leftTarget = PerspectiveHotspotPlacement.targetPoint(for: left)
+        let downTarget = PerspectiveHotspotPlacement.targetPoint(for: down)
+        XCTAssertEqual(upTarget.y * 1_556, 281, accuracy: 0.001)
+        XCTAssertEqual(leftTarget.x * 388, 64, accuracy: 0.001)
+        XCTAssertEqual(downTarget.y * 1_556, 552, accuracy: 0.001)
+
+        let renderedSize = CGSize(
+            width: 388 * RemoteCanvasMetrics.perspectiveHorizontalScale,
+            height: 1_556
+        )
+        let leftOffset = PerspectiveHotspotPlacement.targetOffset(
+            for: left,
+            remoteSize: renderedSize
+        )
+        XCTAssertEqual(leftOffset.width, -108 * 1.10, accuracy: 0.001)
+
+        let topProjection = PerspectiveHotspotPlacement.markerProjection(for: power)
+        let bottomProjection = PerspectiveHotspotPlacement.markerProjection(for: menu)
+        XCTAssertGreaterThan(topProjection.verticalScale, 1)
+        XCTAssertLessThan(topProjection.rotationDegrees, 0)
+        XCTAssertGreaterThan(bottomProjection.rotationDegrees, 0)
     }
 
     func testHomeDeviceCardKeepsTheReferenceProductHierarchyForSilverHardware() {

@@ -86,14 +86,20 @@ struct RemoteCanvasView: View {
 
                 ForEach(RemoteButtonSlot.demoSlots) { slot in
                     let placement = PerspectiveHotspotPlacement.point(for: slot)
+                    let remoteSize = CGSize(
+                        width: imageWidth
+                            * productScale
+                            * RemoteCanvasMetrics.perspectiveHorizontalScale,
+                        height: imageHeight * productScale
+                    )
                     RemoteHotspot(
                         slot: slot,
-                        remoteSize: CGSize(
-                            width: imageWidth
-                                * productScale
-                                * RemoteCanvasMetrics.perspectiveHorizontalScale,
-                            height: imageHeight * productScale
-                        )
+                        remoteSize: remoteSize,
+                        targetOffset: PerspectiveHotspotPlacement.targetOffset(
+                            for: slot,
+                            remoteSize: remoteSize
+                        ),
+                        markerProjection: PerspectiveHotspotPlacement.markerProjection(for: slot)
                     )
                         .position(
                             x: remoteCenterX
@@ -140,19 +146,76 @@ struct RemoteCanvasView: View {
     }
 }
 
-private enum PerspectiveHotspotPlacement {
+struct PerspectiveMarkerProjection: Equatable {
+    let verticalScale: CGFloat
+    let rotationDegrees: Double
+}
+
+enum PerspectiveHotspotPlacement {
+    private static let assetSize = CGSize(width: 388, height: 1_556)
+
     static func point(for slot: RemoteButtonSlot) -> CGPoint {
         switch slot.id {
-        case "power": CGPoint(x: 0.225, y: 0.083)
-        case "voice": CGPoint(x: 0.695, y: 0.083)
-        case "up", "left", "ok", "right", "down": CGPoint(x: 0.455, y: 0.255)
-        case "back": CGPoint(x: 0.260, y: 0.440)
-        case "home": CGPoint(x: 0.260, y: 0.542)
-        case "menu": CGPoint(x: 0.260, y: 0.650)
-        case "volumeUp", "volumeDown": CGPoint(x: 0.650, y: 0.494)
-        case "tv": CGPoint(x: 0.650, y: 0.650)
+        case "power": normalizedPoint(x: 83, y: 150)
+        case "voice": normalizedPoint(x: 262, y: 140)
+        case "up", "left", "ok", "right", "down": normalizedPoint(x: 172, y: 418)
+        case "back": normalizedPoint(x: 101, y: 686)
+        case "home": normalizedPoint(x: 102, y: 848)
+        case "menu": normalizedPoint(x: 102, y: 1_017)
+        case "volumeUp", "volumeDown": normalizedPoint(x: 245, y: 768)
+        case "tv": normalizedPoint(x: 245, y: 1_018)
         default: CGPoint(x: slot.x, y: slot.y)
         }
+    }
+
+    static func targetPoint(for slot: RemoteButtonSlot) -> CGPoint {
+        switch slot.id {
+        // The direction markers sit halfway between the inner and outer rings,
+        // rather than on the much smaller front-view radius from the model.
+        case "up": normalizedPoint(x: 172, y: 281)
+        case "left": normalizedPoint(x: 64, y: 418)
+        case "ok": normalizedPoint(x: 171, y: 416)
+        case "right": normalizedPoint(x: 280, y: 418)
+        case "down": normalizedPoint(x: 172, y: 552)
+        // The rocker uses one shared hit region, but each half needs its own
+        // optical target centered on the printed plus/minus control.
+        case "volumeUp": normalizedPoint(x: 245, y: 684)
+        case "volumeDown": normalizedPoint(x: 245, y: 849)
+        default: point(for: slot)
+        }
+    }
+
+    static func targetOffset(for slot: RemoteButtonSlot, remoteSize: CGSize) -> CGSize {
+        let origin = point(for: slot)
+        let target = targetPoint(for: slot)
+        return CGSize(
+            width: (target.x - origin.x) * remoteSize.width,
+            height: (target.y - origin.y) * remoteSize.height
+        )
+    }
+
+    static func markerProjection(for slot: RemoteButtonSlot) -> PerspectiveMarkerProjection {
+        let target = targetPoint(for: slot)
+
+        // Circular controls in the perspective artwork render as subtly taller
+        // ellipses. The left edge is more foreshortened than the right edge.
+        let verticalScale = 1.15 - 0.06 * target.x
+
+        // The face is a shallow trapezoid: its horizontal tangent rises near
+        // the top and falls near the bottom. Match that local tangent instead
+        // of leaving every target perfectly horizontal.
+        let tangentRise = -20 + 59 * target.y
+        let tangentRun = 361 * RemoteCanvasMetrics.perspectiveHorizontalScale
+        let rotation = atan2(tangentRise, tangentRun) * 180 / .pi
+
+        return PerspectiveMarkerProjection(
+            verticalScale: verticalScale,
+            rotationDegrees: Double(rotation)
+        )
+    }
+
+    private static func normalizedPoint(x: CGFloat, y: CGFloat) -> CGPoint {
+        CGPoint(x: x / assetSize.width, y: y / assetSize.height)
     }
 }
 
@@ -320,6 +383,8 @@ private struct HotspotCallout: View {
 private struct RemoteHotspot: View {
     let slot: RemoteButtonSlot
     let remoteSize: CGSize
+    let targetOffset: CGSize
+    let markerProjection: PerspectiveMarkerProjection
 
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
@@ -358,9 +423,10 @@ private struct RemoteHotspot: View {
                         Circle()
                             .stroke(targetColor(accent: accent), lineWidth: isSelected ? 2 : 1.5)
                     }
-                    .frame(width: 18, height: 18)
+                    .frame(width: 18, height: 18 * markerProjection.verticalScale)
+                    .rotationEffect(.degrees(markerProjection.rotationDegrees))
                     .shadow(color: .black.opacity(0.24), radius: 2, y: 1)
-                    .offset(targetOffset(width: width, height: height))
+                    .offset(targetOffset)
                     .allowsHitTesting(false)
             }
             .frame(width: width, height: height)
@@ -427,24 +493,6 @@ private struct RemoteHotspot: View {
         return .white
     }
 
-    private func targetOffset(width: CGFloat, height: CGFloat) -> CGSize {
-        switch slot.shape {
-        case .dpadUp:
-            CGSize(width: 0, height: -height * 0.29)
-        case .dpadLeft:
-            CGSize(width: -width * 0.29, height: 0)
-        case .dpadRight:
-            CGSize(width: width * 0.29, height: 0)
-        case .dpadDown:
-            CGSize(width: 0, height: height * 0.29)
-        case .rockerTop:
-            CGSize(width: 0, height: -height * 0.23)
-        case .rockerBottom:
-            CGSize(width: 0, height: height * 0.23)
-        default:
-            .zero
-        }
-    }
 }
 
 private struct HotspotShape: Shape {

@@ -50,7 +50,7 @@ struct HomeView: View {
                         && (!store.permissions.inputMonitoringGranted
                             || !store.permissions.accessibilityGranted) {
                         PermissionRecoveryBanner()
-                            .frame(width: 560)
+                            .frame(width: 520)
                             .position(x: proxy.size.width / 2, y: proxy.size.height - 46)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
