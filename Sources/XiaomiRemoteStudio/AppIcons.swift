@@ -10,8 +10,13 @@ enum AppIconRegistry {
         // Navigation and application chrome
         "av.remote": "radio-receiver",
         "bolt.horizontal.circle": "workflow",
+        "bolt": "zap",
+        "bolt.fill": "zap",
+        "wave.3.right": "bluetooth",
         "gearshape": "settings",
         "plus": "plus",
+        "arrow.clockwise": "refresh-cw",
+        "sparkles": "sparkles",
         "chevron.left": "chevron-left",
         "chevron.right": "chevron-right",
         "chevron.up": "chevron-up",
@@ -20,8 +25,17 @@ enum AppIconRegistry {
         "slider.horizontal.3": "sliders-horizontal",
         "globe": "globe",
         "safari.fill": "compass",
+        "photo": "image",
         "music.note": "music",
         "scissors": "scissors",
+        "app.dashed": "app-window",
+        "person": "user-round",
+        "ellipsis": "ellipsis",
+        "list.bullet": "menu",
+        "square.grid.2x2": "layout-grid",
+        "shopping.bag": "shopping-bag",
+        "list-filter": "list-filter",
+        "circle-question-mark": "circle-question-mark",
 
         // Actions and feedback
         "magnifyingglass": "search",
@@ -29,10 +43,12 @@ enum AppIconRegistry {
         "xmark.circle.fill": "circle-x",
         "calendar": "calendar",
         "checkmark": "check",
-        "checkmark.circle.fill": "circle-check",
+        "checkmark.circle": "circle-check-big",
+        "checkmark.circle.fill": "circle-check-big",
         "play.fill": "play",
         "playpause.fill": "circle-play",
         "forward.end.fill": "skip-forward",
+        "backward.end.fill": "skip-back",
         "speaker.plus.fill": "volume-2",
         "speaker.minus.fill": "volume-1",
         "speaker.slash.fill": "volume-x",
@@ -43,6 +59,18 @@ enum AppIconRegistry {
         "moon.stars.fill": "moon-star",
         "video.fill": "video",
         "square.and.pencil": "square-pen",
+        "doc.on.doc": "copy",
+        "clipboard": "clipboard-paste",
+        "arrow.uturn.backward.circle": "undo-2",
+        "arrow.uturn.forward.circle": "redo-2",
+        "textformat": "text-cursor-input",
+        "return": "corner-down-left",
+        "escape": "circle-x",
+        "delete.left": "delete",
+        "arrow.left": "arrow-left",
+        "arrow.right": "arrow-right",
+        "folder.fill": "folder",
+        "note.text": "notebook-pen",
         "wand.and.stars": "wand-sparkles",
         "lock.shield.fill": "shield-check",
         "checkmark.shield.fill": "shield-check",
@@ -60,12 +88,14 @@ enum AppIconRegistry {
     ]
 
     static let interfaceSymbols: Set<String> = [
-        "av.remote", "bolt.horizontal.circle", "gearshape", "plus",
+        "av.remote", "bolt.horizontal.circle", "bolt", "bolt.fill", "wave.3.right", "gearshape", "plus",
+        "arrow.clockwise", "sparkles",
+        "ellipsis", "list.bullet", "square.grid.2x2", "shopping.bag", "list-filter", "circle-question-mark",
         "chevron.left", "chevron.down", "button.programmable",
         "slider.horizontal.3", "magnifyingglass", "xmark", "xmark.circle.fill", "calendar",
-        "checkmark", "checkmark.circle.fill", "play.fill",
+        "checkmark", "checkmark.circle", "checkmark.circle.fill", "play.fill",
         "wand.and.stars", "lock.shield.fill", "checkmark.shield.fill",
-        "dot.radiowaves.left.and.right"
+        "dot.radiowaves.left.and.right", "trash", "battery", "keyboard", "pencil", "panel-top", "settings", "scan"
     ]
 
     static func lucideID(for symbol: String) -> String {
@@ -85,28 +115,41 @@ private enum LucideAssetLoader {
     private static let bundleURL: URL? = {
         _ = packageLinkAnchor
 
-        var roots: [URL] = [Bundle.module.bundleURL.deletingLastPathComponent()]
         if let mainResources = Bundle.main.resourceURL {
-            roots.append(mainResources)
+            let packagedBundle = mainResources
+                .appendingPathComponent("LucideIcons_LucideIcons.bundle", isDirectory: true)
+            if FileManager.default.fileExists(atPath: packagedBundle.path) {
+                return packagedBundle
+            }
         }
-        roots.append(Bundle.main.bundleURL.deletingLastPathComponent())
 
-        return roots
+        // Development and test builds keep dependency bundles next to the
+        // module bundle. Only resolve Bundle.module after the installed-app
+        // fast path above; asking Foundation to inspect the app Resources
+        // directory here can stall while it enumerates the full icon catalog.
+        return [
+            Bundle.module.bundleURL.deletingLastPathComponent(),
+            Bundle.main.bundleURL.deletingLastPathComponent()
+        ]
             .map { $0.appendingPathComponent("LucideIcons_LucideIcons.bundle", isDirectory: true) }
             .first { FileManager.default.fileExists(atPath: $0.path) }
     }()
 
     static func image(named iconID: String) -> NSImage? {
-        if let image = NSImage.image(lucideId: iconID) {
-            return image
+        if let bundleURL {
+            let imageURL = bundleURL
+                .appendingPathComponent("icons.xcassets", isDirectory: true)
+                .appendingPathComponent("\(iconID).imageset", isDirectory: true)
+                .appendingPathComponent("\(iconID).pdf")
+            if let image = NSImage(contentsOf: imageURL) {
+                return image
+            }
         }
 
-        guard let bundleURL else { return nil }
-        let imageURL = bundleURL
-            .appendingPathComponent("icons.xcassets", isDirectory: true)
-            .appendingPathComponent("\(iconID).imageset", isDirectory: true)
-            .appendingPathComponent("\(iconID).pdf")
-        return NSImage(contentsOf: imageURL)
+        // The package helper asks CoreUI to inspect the entire asset catalog.
+        // Keep it only as a development fallback: the packaged app ships the
+        // raw PDFs above, which load immediately and avoid a first-launch stall.
+        return NSImage.image(lucideId: iconID)
     }
 }
 

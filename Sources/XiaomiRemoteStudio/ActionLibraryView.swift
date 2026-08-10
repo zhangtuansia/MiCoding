@@ -1,114 +1,250 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
+enum ActionLibraryLayoutMetrics {
+    // Freshly measured from Options+ at 1,180 × 760: the fixed drawer
+    // header spans y=0...70 before the 26 pt search inset.
+    static let headerHeight: CGFloat = 70
+    static let headerLeadingPadding: CGFloat = 30
+    static let headerTitleOpticalScale: CGFloat = 1.055
+    static let headerTitleOpticalYOffset: CGFloat = -2
+    static let searchTextOpticalXOffset: CGFloat = 1
+    static let searchTextOpticalYOffset: CGFloat = -1.5
+    static let searchPlaceholderOpacity: CGFloat = 0.45
+    static let searchIconSize: CGFloat = 18.5
+    static let searchIconXOffset: CGFloat = 1.5
+    static let searchIconYOffset: CGFloat = 0.5
+    static let recommendedTitleOpticalXOffset: CGFloat = 1.5
+    static let recommendedTitleOpticalYOffset: CGFloat = -1
+    static let collapsibleTitleOpticalXOffset: CGFloat = 1
+    static let smartActionsTitleOpticalYOffset: CGFloat = 3.5
+    static let otherActionsTitleOpticalYOffset: CGFloat = 0
+    static let categoryTrailingPadding: CGFloat = 27.5
+    static let categoryChevronSize: CGFloat = 18
+    static let categoryChevronYOffset: CGFloat = 1
+    static let compactRowTextOpticalXOffset: CGFloat = 0.5
+    static let compactRowTextOpticalYOffset: CGFloat = 2
+    static let compactLatinRowTextOpticalXScale: CGFloat = 1.03
+    static let compactSelectedRowTextOpticalXOffset: CGFloat = 0.5
+    static let compactSelectedRowTextOpticalYOffset: CGFloat = -0.5
+    static let searchTextOpticalXScale: CGFloat = 0.99
+    static let recommendedTitleOpticalXScale: CGFloat = 1
+    static let smartActionsTitleOpticalXScale: CGFloat = 0.96
+    static let smartActionsTitleOpticalYScale: CGFloat = 0.955
+    static let actionsRingDetailHorizontalPadding: CGFloat = 13
+    static let actionsRingConfigurationTopPadding: CGFloat = 26
+    static let actionsRingDescriptionXOffset: CGFloat = -3.5
+    static let actionsRingDescriptionYOffset: CGFloat = 2.5
+    static let actionsRingConfigurationXOffset: CGFloat = -3.5
+    static let shortcutRecorderTopPadding: CGFloat = 20
+    static let shortcutRecorderDetailHeight: CGFloat = 188
+    static let shortcutRecorderRowHeight: CGFloat = 236
+    static let applicationPickerDetailHeight: CGFloat = 140
+    static let applicationPickerRowHeight: CGFloat = 188
+}
+
+private let chooseApplicationAction = RemoteAction(
+    id: "choose-application",
+    title: "打开应用程序",
+    subtitle: "选择任意已安装的 macOS App",
+    symbol: "app.dashed",
+    category: .apps,
+    tint: .blue
+)
 
 struct ActionLibraryView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
+    @State private var expandedCategory: ActionCategory? = .recommended
 
     private var normalizedQuery: String {
         store.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var filteredActions: [RemoteAction] {
-        RemoteAction.catalog.filter { action in
-            let matchesCategory = store.selectedCategory == nil || action.category == store.selectedCategory
-            return matchesCategory && (
-                normalizedQuery.isEmpty
-                    || action.title.localizedCaseInsensitiveContains(normalizedQuery)
-                    || action.subtitle.localizedCaseInsensitiveContains(normalizedQuery)
-            )
+    private var currentAction: RemoteAction? {
+        guard let slot = store.selectedSlot else { return nil }
+        return store.action(for: slot.id, trigger: store.selectedTrigger)
+    }
+
+    private var searchResults: [RemoteAction] {
+        guard !normalizedQuery.isEmpty else { return [] }
+        return availableActions.filter {
+            $0.title.localizedCaseInsensitiveContains(normalizedQuery)
+                || $0.devicePresentationTitle.localizedCaseInsensitiveContains(normalizedQuery)
+                || $0.subtitle.localizedCaseInsensitiveContains(normalizedQuery)
         }
+    }
+
+    private var installedSmartActions: [RemoteAction] {
+        store.installedSmartActionCatalog
+    }
+
+    private var availableActions: [RemoteAction] {
+        RemoteAction.catalog.filter { $0.category != .shortcut }
+            + [chooseApplicationAction]
+            + installedSmartActions
+    }
+
+    private var recommendedActions: [RemoteAction] {
+        let recommendedIDs = [
+            "browser-back",
+            "copy",
+            "volume-down",
+            "undo",
+            "keyboard-shortcut",
+            "spotlight",
+            "show-actions-ring"
+        ]
+        var actions = recommendedIDs.compactMap { id in
+            RemoteAction.catalog.first(where: { $0.id == id })
+        }
+        if let shortcutIndex = actions.firstIndex(where: { $0.id == "keyboard-shortcut" }) {
+            actions.insert(chooseApplicationAction, at: shortcutIndex)
+        } else {
+            actions.append(chooseApplicationAction)
+        }
+        if let currentAction {
+            if currentAction.id.hasPrefix("recorded-keyboard-shortcut-"),
+               let shortcutIndex = actions.firstIndex(where: { $0.id == "keyboard-shortcut" }) {
+                actions[shortcutIndex] = currentAction
+                return actions
+            }
+            let alreadyRecommended = actions.contains(where: { $0.id == currentAction.id })
+            if !alreadyRecommended {
+                actions.insert(currentAction, at: 0)
+            }
+        }
+        return actions
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(store.selectedSlot?.name ?? "按键动作")
-                            .font(AppTypography.sectionTitle)
-                        Text(currentAction.map { "当前：\($0.title)" } ?? "选择要执行的动作")
-                            .font(AppTypography.supporting)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
-                    if currentAction != nil {
-                        Button {
-                            store.testSelectedAction()
-                        } label: {
-                            Label {
-                                Text("测试")
-                            } icon: {
-                                AppIcon(symbol: "play.fill", size: AppIconSize.indicator)
-                            }
-                        }
-                        .buttonStyle(InlineActionButtonStyle())
-                        .help("立即测试当前按键动作")
-                    }
-                }
-
-                if store.selectedSlot != nil {
-                    SearchField(text: $store.searchText)
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 18) {
-                            CategoryTab(title: "全部", selected: store.selectedCategory == nil) {
-                                store.selectedCategory = nil
-                            }
-
-                            ForEach(ActionCategory.allCases) { category in
-                                CategoryTab(title: category.title, selected: store.selectedCategory == category) {
-                                    store.selectedCategory = category
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 22)
-            .padding(.bottom, 13)
-
+            actionHeader
+            actionControls
             separator
 
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    if store.selectedSlot == nil {
-                        EmptySlotSelectionView()
-                            .padding(.top, 72)
-                    } else if filteredActions.isEmpty {
-                        EmptyActionsView(query: normalizedQuery) {
-                            store.searchText = ""
-                            store.selectedCategory = nil
-                        }
-                        .padding(.top, 50)
+                    if normalizedQuery.isEmpty {
+                        categoryGroup(.recommended, title: "推荐", actions: recommendedActions)
+                        categoryGroup(.shortcut, title: "SMART ACTIONS", actions: installedSmartActions)
+                        categoryGroup(
+                            .system,
+                            title: "其他动作",
+                            actions: RemoteAction.catalog.filter { [.system, .media, .apps].contains($0.category) }
+                                + [chooseApplicationAction]
+                        )
+                    } else if searchResults.isEmpty {
+                        Text("结果")
+                            .font(.custom("AvenirNext-DemiBold", size: 14))
+                            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                            .padding(.horizontal, 34)
                     } else {
-                        ForEach(Array(filteredActions.enumerated()), id: \.element.id) { index, action in
-                            ActionRow(action: action, isAssigned: currentAction?.id == action.id)
+                        Text("结果")
+                            .font(.custom("AvenirNext-DemiBold", size: 14))
+                            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                            .padding(.horizontal, 34)
 
-                            if index < filteredActions.count - 1 {
-                                separator
-                                    .padding(.leading, 48)
-                            }
+                        ForEach(searchResults) { action in
+                            CompactActionRow(action: action, selected: action.id == currentAction?.id)
                         }
                     }
                 }
             }
 
-            separator
-
-            Text(store.selectedSlot == nil ? "先选择遥控器按键" : "选择后自动保存到本机")
-                .font(AppTypography.supportingMedium)
-                .foregroundStyle(.tertiary)
-                .padding(.horizontal, 20)
-                .frame(height: 44, alignment: .leading)
         }
         .background(AppTheme.surface(for: colorScheme))
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(AppTheme.separator(for: colorScheme))
-                .frame(width: 1)
+        .onChange(of: store.selectedSlotID) { _, _ in
+            expandedCategory = .recommended
+        }
+        .onAppear { expandedCategory = .recommended }
+    }
+
+    private var actionHeader: some View {
+        HStack(spacing: 0) {
+            triggerMenu
+            Spacer()
+        }
+        .padding(.leading, ActionLibraryLayoutMetrics.headerLeadingPadding)
+        .padding(.trailing, 20)
+        .frame(height: ActionLibraryLayoutMetrics.headerHeight)
+        .background(AppTheme.elevatedSurface(for: colorScheme))
+    }
+
+    private var triggerMenu: some View {
+        Menu {
+            ForEach(RemoteTrigger.allCases) { trigger in
+                Button {
+                    store.selectedTrigger = trigger
+                } label: {
+                    if store.selectedTrigger == trigger {
+                        Label(trigger.title, systemImage: "checkmark")
+                    } else {
+                        Text(trigger.title)
+                    }
+                }
+            }
+
+            if currentAction != nil {
+                Divider()
+
+                Button("测试当前动作") {
+                    store.testSelectedAction()
+                }
+
+                Button("清除当前分配", role: .destructive) {
+                    store.clearSelectedAssignment()
+                }
+            }
+        } label: {
+            Text("动作")
+                // The reference uses a medium Chinese face here; requesting
+                // Avenir Next DemiBold makes PingFang's fallback noticeably
+                // heavier even though the glyph bounds are already correct.
+                .font(.system(size: 21, weight: .regular))
+                .foregroundStyle(AppTheme.text(for: colorScheme))
+                .scaleEffect(
+                    x: ActionLibraryLayoutMetrics.headerTitleOpticalScale,
+                    y: ActionLibraryLayoutMetrics.headerTitleOpticalScale
+                )
+                .frame(height: 32)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .offset(y: ActionLibraryLayoutMetrics.headerTitleOpticalYOffset)
+        .help("动作 · \(store.selectedTrigger.title)；点按可切换触发方式、测试或清除")
+        .accessibilityLabel("触发方式")
+        .accessibilityValue(store.selectedTrigger.title)
+    }
+
+    private var actionControls: some View {
+        SearchField(text: $store.searchText)
+            .padding(.top, 28)
+            .padding(.bottom, 4)
+    }
+
+    private func actions(in category: ActionCategory) -> [RemoteAction] {
+        RemoteAction.catalog.filter { $0.category == category }
+    }
+
+    private func categoryGroup(
+        _ category: ActionCategory,
+        title: String,
+        actions: [RemoteAction]
+    ) -> some View {
+        ActionCategoryGroup(
+            category: category,
+            title: title,
+            actions: actions,
+            expanded: category == .recommended || expandedCategory == category,
+            collapsible: category != .recommended,
+            currentActionID: currentAction?.id
+        ) {
+            withAnimation(.easeOut(duration: 0.16)) {
+                expandedCategory = expandedCategory == category ? nil : category
+            }
         }
     }
 
@@ -116,11 +252,6 @@ struct ActionLibraryView: View {
         Rectangle()
             .fill(AppTheme.separator(for: colorScheme))
             .frame(height: 1)
-    }
-
-    private var currentAction: RemoteAction? {
-        guard let slot = store.selectedSlot else { return nil }
-        return store.action(for: slot.id)
     }
 }
 
@@ -130,152 +261,458 @@ private struct SearchField: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 8) {
-            AppIcon(symbol: "magnifyingglass", size: AppIconSize.control)
-                .foregroundStyle(.secondary)
+        HStack(spacing: 9) {
+            ZStack(alignment: .leading) {
+                if text.isEmpty {
+                    Text("搜索")
+                        .foregroundStyle(Color.secondary.opacity(ActionLibraryLayoutMetrics.searchPlaceholderOpacity))
+                        .offset(y: ActionLibraryLayoutMetrics.searchTextOpticalYOffset)
+                        .scaleEffect(
+                            x: ActionLibraryLayoutMetrics.searchTextOpticalXScale,
+                            y: 1,
+                            anchor: .leading
+                        )
+                        .offset(x: ActionLibraryLayoutMetrics.searchTextOpticalXOffset)
+                        .allowsHitTesting(false)
+                }
 
-            TextField("搜索动作", text: $text)
-                .textFieldStyle(.plain)
-                .font(AppTypography.body)
+                TextField("", text: $text)
+                    .textFieldStyle(.plain)
+                    .offset(y: ActionLibraryLayoutMetrics.searchTextOpticalYOffset)
+            }
+            .font(.custom("AvenirNext-Medium", size: 16))
 
-            if !text.isEmpty {
+            if text.isEmpty {
+                AppIcon(
+                    symbol: "magnifyingglass",
+                    size: ActionLibraryLayoutMetrics.searchIconSize
+                )
+                    .foregroundStyle(AppTheme.text(for: colorScheme))
+                    .offset(
+                        x: ActionLibraryLayoutMetrics.searchIconXOffset,
+                        y: ActionLibraryLayoutMetrics.searchIconYOffset
+                    )
+            } else {
                 Button {
                     text = ""
                 } label: {
-                    AppIcon(symbol: "xmark.circle.fill", size: AppIconSize.control)
-                        .foregroundStyle(.tertiary)
+                    Circle()
+                        .fill(AppTheme.accent(for: colorScheme))
+                        .frame(width: 18, height: 18)
+                        .overlay {
+                            AppIcon(symbol: "xmark", size: 10)
+                                .foregroundStyle(AppTheme.onAccent(for: colorScheme))
+                        }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(QuietButtonStyle())
+                .accessibilityLabel("清除搜索")
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: AppMetrics.controlHeight)
-        .background(AppTheme.elevatedSurface(for: colorScheme).opacity(0.78))
-        .clipShape(RoundedRectangle(cornerRadius: AppMetrics.radiusControl, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: AppMetrics.radiusControl, style: .continuous)
-                .stroke(AppTheme.separator(for: colorScheme), lineWidth: 1)
-        }
+        .padding(.leading, 32)
+        .padding(.trailing, 29)
+        .frame(height: 48)
+        .background(AppTheme.surface(for: colorScheme))
     }
 }
 
-private struct CategoryTab: View {
+private struct ActionCategoryGroup: View {
+    let category: ActionCategory
     let title: String
-    let selected: Bool
-    let action: () -> Void
+    let actions: [RemoteAction]
+    let expanded: Bool
+    let collapsible: Bool
+    let currentActionID: String?
+    let toggle: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(selected ? AppTypography.label : AppTypography.supporting)
-                .foregroundStyle(selected ? Color.primary : Color.secondary)
-                .padding(.bottom, 7)
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(selected ? AppTheme.accent(for: colorScheme) : .clear)
-                        .frame(height: 1.5)
+        VStack(spacing: 0) {
+            if collapsible {
+                Button(action: toggle) {
+                    categoryHeader
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(QuietButtonStyle())
+            } else {
+                categoryHeader
+            }
+
+            if expanded {
+                ForEach(actions) { action in
+                    CompactActionRow(action: action, selected: action.id == currentActionID)
+                }
+            }
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.065))
+                .frame(height: 1)
         }
-        .buttonStyle(QuietButtonStyle())
+    }
+
+    private var categoryHeader: some View {
+        HStack {
+            Text(title)
+                .font(
+                    .custom(
+                        title == "SMART ACTIONS" ? "AvenirNext-Medium" : "AvenirNext-DemiBold",
+                        size: 14
+                    )
+                )
+                .foregroundStyle(colorScheme == .dark ? AppTheme.text(for: colorScheme) : .black)
+                .scaleEffect(
+                    x: !collapsible
+                        ? ActionLibraryLayoutMetrics.recommendedTitleOpticalXScale
+                        : (title == "SMART ACTIONS"
+                            ? ActionLibraryLayoutMetrics.smartActionsTitleOpticalXScale
+                            : 1),
+                    y: title == "SMART ACTIONS"
+                        ? ActionLibraryLayoutMetrics.smartActionsTitleOpticalYScale
+                        : 1,
+                    anchor: .leading
+                )
+                .offset(
+                    x: !collapsible
+                        ? ActionLibraryLayoutMetrics.recommendedTitleOpticalXOffset
+                        : ActionLibraryLayoutMetrics.collapsibleTitleOpticalXOffset,
+                    y: !collapsible
+                        ? ActionLibraryLayoutMetrics.recommendedTitleOpticalYOffset
+                        : (title == "SMART ACTIONS"
+                            ? ActionLibraryLayoutMetrics.smartActionsTitleOpticalYOffset
+                            : ActionLibraryLayoutMetrics.otherActionsTitleOpticalYOffset)
+                )
+            Spacer()
+            if collapsible {
+                AppIcon(
+                    symbol: expanded ? "chevron.up" : "chevron.down",
+                    size: ActionLibraryLayoutMetrics.categoryChevronSize
+                )
+                .foregroundStyle(colorScheme == .dark ? AppTheme.text(for: colorScheme) : .black)
+                .offset(y: ActionLibraryLayoutMetrics.categoryChevronYOffset)
+            }
+        }
+        .padding(.leading, 34)
+        .padding(.trailing, collapsible ? ActionLibraryLayoutMetrics.categoryTrailingPadding : 34)
+        .frame(height: collapsible ? 48 : 56)
+        .contentShape(Rectangle())
     }
 }
 
-private struct ActionRow: View {
+private struct CompactActionRow: View {
     let action: RemoteAction
-    let isAssigned: Bool
+    let selected: Bool
 
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
-    @State private var isHovered = false
+    @State private var hovered = false
+    @State private var showsShortcutRecorder = false
+    @State private var showsApplicationPicker = false
 
     var body: some View {
-        Button {
-            store.assignToSelectedSlot(action)
-        } label: {
-            HStack(spacing: 12) {
-                AppIcon(symbol: action.symbol, size: AppIconSize.row)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28)
+        VStack(spacing: 0) {
+            Button {
+                if isKeyboardShortcut {
+                    showsShortcutRecorder.toggle()
+                    showsApplicationPicker = false
+                } else if isApplicationPicker {
+                    showsApplicationPicker.toggle()
+                    showsShortcutRecorder = false
+                } else {
+                    store.assignToSelectedSlot(action)
+                }
+            } label: {
+                HStack(spacing: 15) {
+                    Circle()
+                        .fill(rowSelected ? AppTheme.onAccent(for: colorScheme) : Color.primary.opacity(0.11))
+                        .frame(width: 18, height: 18)
+                        .overlay {
+                            if rowSelected {
+                                Circle()
+                                    .fill(AppTheme.accent(for: colorScheme))
+                                    .frame(width: 6, height: 6)
+                            }
+                        }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(action.title)
-                        .font(AppTypography.bodyMedium)
-                    Text(action.subtitle)
-                        .font(AppTypography.supporting)
-                        .foregroundStyle(.secondary)
+                    Text(action.devicePresentationTitle)
+                        .font(
+                            .custom(
+                                rowSelected ? "AvenirNext-DemiBold" : "AvenirNext-Regular",
+                                size: 14
+                            )
+                        )
+                        .foregroundStyle(
+                            rowSelected
+                                ? AppTheme.onAccent(for: colorScheme)
+                                : (colorScheme == .dark ? AppTheme.text(for: colorScheme) : .black)
+                        )
+                        .scaleEffect(
+                            x: usesLatinOpticalScale
+                                ? ActionLibraryLayoutMetrics.compactLatinRowTextOpticalXScale
+                                : 1,
+                            y: 1,
+                            anchor: .leading
+                        )
+                        .offset(
+                            x: rowSelected
+                                ? ActionLibraryLayoutMetrics.compactSelectedRowTextOpticalXOffset
+                                : ActionLibraryLayoutMetrics.compactRowTextOpticalXOffset,
+                            y: rowSelected
+                                ? ActionLibraryLayoutMetrics.compactSelectedRowTextOpticalYOffset
+                                : ActionLibraryLayoutMetrics.compactRowTextOpticalYOffset
+                        )
                         .lineLimit(1)
-                }
 
-                Spacer(minLength: 6)
+                    Spacer()
 
-                if isAssigned {
-                    AppIcon(symbol: "checkmark", size: AppIconSize.indicator)
-                        .foregroundStyle(AppTheme.accent(for: colorScheme))
+                    if action.id == "show-actions-ring" {
+                        Text("新")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color(red: 45 / 255, green: 145 / 255, blue: 70 / 255))
+                            .frame(width: 20, height: 20)
+                            .background(Color(red: 231 / 255, green: 249 / 255, blue: 232 / 255))
+                            .clipShape(Circle())
+                            .padding(.trailing, 1)
+                    }
                 }
+                .padding(.horizontal, 15)
+                .frame(height: rowSelected ? 48 : 32)
+                .background(
+                    rowSelected
+                        ? AppTheme.accent(for: colorScheme)
+                        : (hovered ? Color.primary.opacity(0.025) : Color.clear)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: rowSelected ? 4 : 0, style: .continuous))
+                .padding(.leading, 17)
+                .padding(.trailing, 16)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .frame(height: AppMetrics.rowHeight)
-            .background(
-                isAssigned
-                    ? AppTheme.accent(for: colorScheme).opacity(0.065)
-                    : (isHovered ? Color.primary.opacity(0.025) : .clear)
-            )
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(isAssigned ? AppTheme.accent(for: colorScheme) : .clear)
-                    .frame(width: 3, height: 34)
+            .buttonStyle(QuietButtonStyle())
+
+            if selected && action.id == "show-actions-ring" {
+                actionsRingDetail
+                    .offset(y: -2)
+            } else if showsInlineShortcutRecorder {
+                shortcutRecorderDetail
+                    .offset(y: -2)
+            } else if showsApplicationPicker {
+                applicationPickerDetail
+                    .offset(y: -2)
             }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(QuietButtonStyle())
+        .frame(height: rowHeight, alignment: .top)
         .onDrag {
+            guard !isApplicationPicker else { return NSItemProvider() }
             store.beginDragging(action)
             return NSItemProvider(object: action.id as NSString)
         }
-        .onHover { isHovered = $0 }
-    }
-}
-
-private struct EmptySlotSelectionView: View {
-    var body: some View {
-        ContentUnavailableView {
-            Label {
-                Text("先选择一个按键")
-            } icon: {
-                AppIcon(symbol: "button.programmable", size: 38)
-            }
-        } description: {
-            Text("在遥控器图上选择按键后，再为它分配动作。")
+        .onHover { hovered = $0 }
+        .onChange(of: store.selectedSlotID) { _, _ in
+            showsShortcutRecorder = false
+            showsApplicationPicker = false
         }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-private struct EmptyActionsView: View {
-    let query: String
-    let reset: () -> Void
-
-    var body: some View {
-        ContentUnavailableView {
-            Label {
-                Text("没有匹配的动作")
-            } icon: {
-                AppIcon(symbol: "magnifyingglass", size: 38)
+        .contextMenu {
+            if selected {
+                Menu("触发方式") {
+                    ForEach(RemoteTrigger.allCases) { trigger in
+                        Button(trigger.title) {
+                            store.selectedTrigger = trigger
+                        }
+                    }
+                }
+                Button("测试当前动作") {
+                    store.testSelectedAction()
+                }
+                Divider()
+                Button("清除当前分配", role: .destructive) {
+                    store.clearSelectedAssignment()
+                }
             }
-        } description: {
-            if query.isEmpty {
-                Text("当前分类暂时没有可用动作。")
-            } else {
-                Text("没有找到“\(query)”相关动作，换个关键词试试。")
-                    .lineLimit(2)
-            }
-        } actions: {
-            Button("清除筛选", action: reset)
-                .buttonStyle(SecondaryActionButtonStyle())
         }
-        .frame(maxWidth: .infinity)
+        .help(selected ? "右键可切换触发方式、测试或清除" : action.subtitle)
+    }
+
+    private var rowHeight: CGFloat {
+        if selected && action.id == "show-actions-ring" { return 165 }
+        if showsInlineShortcutRecorder { return ActionLibraryLayoutMetrics.shortcutRecorderRowHeight }
+        if showsApplicationPicker { return ActionLibraryLayoutMetrics.applicationPickerRowHeight }
+        return rowSelected ? 56 : 37
+    }
+
+    private var isRecordedKeyboardShortcut: Bool {
+        action.id.hasPrefix("recorded-keyboard-shortcut-")
+    }
+
+    private var isKeyboardShortcut: Bool {
+        action.id == "keyboard-shortcut" || isRecordedKeyboardShortcut
+    }
+
+    private var isApplicationPicker: Bool {
+        action.id == chooseApplicationAction.id
+    }
+
+    private var showsInlineShortcutRecorder: Bool {
+        isKeyboardShortcut && (showsShortcutRecorder || (selected && isRecordedKeyboardShortcut))
+    }
+
+    private var rowSelected: Bool {
+        selected
+            || (action.id == "keyboard-shortcut" && showsShortcutRecorder)
+            || (isApplicationPicker && showsApplicationPicker)
+    }
+
+    private var usesLatinOpticalScale: Bool {
+        action.devicePresentationTitle.unicodeScalars.contains {
+            $0.isASCII && CharacterSet.letters.contains($0)
+        }
+    }
+
+    private var shortcutRecorderDetail: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("支持 ⌘ / ⌥ / ⌃ / ⇧、F1–F20、方向键和导航键。")
+                .font(.custom("AvenirNext-Regular", size: 14))
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
+
+            HStack(spacing: 6) {
+                ForEach(RemoteTrigger.allCases) { trigger in
+                    Button {
+                        store.selectedTrigger = trigger
+                    } label: {
+                        Text(trigger.title)
+                            .font(.custom("AvenirNext-Medium", size: 12))
+                            .foregroundStyle(
+                                store.selectedTrigger == trigger
+                                    ? AppTheme.onAccent(for: colorScheme)
+                                    : Color.primary.opacity(0.72)
+                            )
+                            .frame(maxWidth: .infinity, minHeight: 28)
+                            .background(
+                                store.selectedTrigger == trigger
+                                    ? AppTheme.accent(for: colorScheme)
+                                    : Color.primary.opacity(0.055)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    }
+                    .buttonStyle(QuietButtonStyle())
+                }
+            }
+
+            ShortcutRecorderField(
+                displayName: isRecordedKeyboardShortcut ? action.subtitle : "按下按键组合",
+                showsPlaceholder: !isRecordedKeyboardShortcut
+            ) { keyCode, flags, displayName in
+                store.assignRecordedKeyboardShortcut(
+                    keyCode: keyCode,
+                    flags: flags,
+                    displayName: displayName
+                )
+                showsShortcutRecorder = false
+            }
+            .frame(height: 40)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, ActionLibraryLayoutMetrics.shortcutRecorderTopPadding)
+        .padding(.bottom, 14)
+        .frame(
+            height: ActionLibraryLayoutMetrics.shortcutRecorderDetailHeight,
+            alignment: .topLeading
+        )
+        .background(
+            colorScheme == .dark
+                ? AppTheme.elevatedSurface(for: colorScheme)
+                : Color(white: 240 / 255)
+        )
+        .clipShape(
+            UnevenRoundedRectangle(
+                bottomLeadingRadius: 8,
+                bottomTrailingRadius: 8,
+                style: .continuous
+            )
+        )
+        .padding(.leading, 17)
+        .padding(.trailing, 16)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var applicationPickerDetail: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("选择任意 .app。之后按下“\(store.selectedTrigger.title)”即可启动并切换到该应用。")
+                .font(.custom("AvenirNext-Regular", size: 14))
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                store.chooseApplicationForSelectedSlot()
+            } label: {
+                HStack(spacing: 8) {
+                    AppIcon(symbol: "app.dashed", size: 17)
+                    Text("选择应用程序…")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PrimaryActionButtonStyle())
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+        .frame(
+            height: ActionLibraryLayoutMetrics.applicationPickerDetailHeight,
+            alignment: .topLeading
+        )
+        .background(
+            colorScheme == .dark
+                ? AppTheme.elevatedSurface(for: colorScheme)
+                : Color(white: 240 / 255)
+        )
+        .clipShape(
+            UnevenRoundedRectangle(
+                bottomLeadingRadius: 8,
+                bottomTrailingRadius: 8,
+                style: .continuous
+            )
+        )
+        .padding(.leading, 17)
+        .padding(.trailing, 16)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var actionsRingDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Actions Ring 是设备的可自定义数字扩展，让您一键即可访问工具、配置文件等功能。")
+                .font(.custom("AvenirNext-Regular", size: 14))
+                .lineSpacing(2)
+                .frame(height: 40, alignment: .topLeading)
+                .offset(
+                    x: ActionLibraryLayoutMetrics.actionsRingDescriptionXOffset,
+                    y: ActionLibraryLayoutMetrics.actionsRingDescriptionYOffset
+                )
+
+            Button("配置 ACTIONS RING") {
+                store.showActionsRingFromDeviceDetail()
+            }
+            .font(.custom("AvenirNext-DemiBold", size: 14))
+            .foregroundStyle(AppTheme.accent(for: colorScheme))
+            .buttonStyle(QuietButtonStyle())
+            .padding(.top, ActionLibraryLayoutMetrics.actionsRingConfigurationTopPadding)
+            .offset(x: ActionLibraryLayoutMetrics.actionsRingConfigurationXOffset)
+        }
+        .padding(.vertical, 16)
+        .padding(.horizontal, ActionLibraryLayoutMetrics.actionsRingDetailHorizontalPadding)
+        .frame(maxWidth: .infinity, minHeight: 117, maxHeight: 117, alignment: .topLeading)
+        .background(
+            colorScheme == .dark
+                ? AppTheme.elevatedSurface(for: colorScheme)
+                : Color(white: 240 / 255)
+        )
+        .clipShape(
+            UnevenRoundedRectangle(
+                bottomLeadingRadius: 8,
+                bottomTrailingRadius: 8,
+                style: .continuous
+            )
+        )
+        .padding(.leading, 17)
+        .padding(.trailing, 16)
+        .accessibilityElement(children: .contain)
     }
 }

@@ -30,6 +30,42 @@ for resource_bundle in $resource_bundles; do
 done
 chmod +x "$contents_dir/MacOS/XiaomiRemoteStudio"
 
-codesign --force --deep --sign - "$app_dir"
+signing_identity=${MICODING_CODESIGN_IDENTITY:-}
+if [[ -z "$signing_identity" ]]; then
+    candidate_text=$(
+        security find-identity -v -p codesigning 2>/dev/null \
+            | rg '"Apple Development:' \
+            | rg -v 'CSSMERR_' \
+            | rg -o '[0-9A-F]{40}' \
+            || true
+    )
+    signing_identity="-"
+    signing_candidates=(${(f)candidate_text})
+    for candidate in $signing_candidates; do
+        # find-identity can still surface a leaf whose issuing certificate was
+        # revoked. Sign once and ask Gatekeeper for the concrete chain error;
+        # a plain “rejected” is expected for an unnotarized local debug build.
+        if codesign --force --deep --sign "$candidate" "$app_dir" >/dev/null 2>&1; then
+            assessment=$(spctl --assess --type execute --verbose=4 "$app_dir" 2>&1 || true)
+            if ! print -r -- "$assessment" | rg -q 'CSSMERR_TP_CERT_REVOKED|certificate revoked'; then
+                signing_identity="$candidate"
+                break
+            fi
+        fi
+    done
+fi
+
+if [[ "$signing_identity" == "-" ]]; then
+    # Ad-hoc is a portable fallback, but TCC still adds the changing cdhash to
+    # privacy grants. Use a persistent Apple Development identity whenever one
+    # is available so Input Monitoring survives local app updates.
+    codesign --force --deep --sign - \
+        --requirements '=designated => identifier "io.xiaomiremote.studio"' \
+        "$app_dir"
+    print "Signed ad-hoc; privacy permissions may need renewal after rebuilds."
+else
+    codesign --force --deep --sign "$signing_identity" "$app_dir"
+    print "Signed with stable local development identity $signing_identity."
+fi
 
 print "$app_dir"

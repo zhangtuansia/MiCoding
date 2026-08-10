@@ -4,6 +4,7 @@ import Foundation
 final class RemoteGestureEngine {
     var holdMilliseconds = 350
     var doubleTapMilliseconds = 250
+    var debounceMilliseconds = 30
     var hasBinding: ((String, RemoteTrigger) -> Bool)?
     var onResolvedTrigger: ((ResolvedRemoteTrigger) -> Void)?
 
@@ -12,6 +13,7 @@ final class RemoteGestureEngine {
         var holdFired = false
         var waitingForSecondTap = false
         var sequence = 0
+        var lastReleaseTimestamp: Date?
     }
 
     private var states: [String: KeyState] = [:]
@@ -19,9 +21,9 @@ final class RemoteGestureEngine {
     func handle(_ event: RemoteInputEvent) {
         switch event.phase {
         case .began:
-            handleDown(slotID: event.slotID)
+            handleDown(slotID: event.slotID, timestamp: event.timestamp)
         case .ended:
-            handleUp(slotID: event.slotID)
+            handleUp(slotID: event.slotID, timestamp: event.timestamp)
         }
     }
 
@@ -29,9 +31,14 @@ final class RemoteGestureEngine {
         states.removeAll()
     }
 
-    private func handleDown(slotID: String) {
+    private func handleDown(slotID: String, timestamp: Date) {
         var state = states[slotID] ?? KeyState()
         guard !state.isDown else { return }
+        if debounceMilliseconds > 0,
+           let lastReleaseTimestamp = state.lastReleaseTimestamp,
+           timestamp.timeIntervalSince(lastReleaseTimestamp) * 1_000 < Double(debounceMilliseconds) {
+            return
+        }
 
         if state.waitingForSecondTap,
            hasBinding?(slotID, .doubleTap) == true {
@@ -61,11 +68,12 @@ final class RemoteGestureEngine {
         }
     }
 
-    private func handleUp(slotID: String) {
+    private func handleUp(slotID: String, timestamp: Date) {
         var state = states[slotID] ?? KeyState()
         guard state.isDown else { return }
         state.isDown = false
         state.sequence += 1
+        state.lastReleaseTimestamp = timestamp
 
         if state.holdFired {
             state.holdFired = false
