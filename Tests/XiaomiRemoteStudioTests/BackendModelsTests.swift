@@ -2140,6 +2140,60 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(recorded[0].1, UInt64(NSEvent.ModifierFlags.function.rawValue))
         XCTAssertEqual(recorded[0].2, "fn")
 
+        // The live modifier-state fallback must finish recording even if
+        // AppKit never delivers the fn-up event (for example when Globe opens
+        // the input-source or emoji UI).
+        recorded.removeAll()
+        recorder.flagsChanged(with: fnDown)
+        recorder.observeFunctionModifierState(currentModifiers: [])
+        XCTAssertEqual(recorded.count, 1)
+        XCTAssertEqual(recorded[0].0, 63)
+        XCTAssertEqual(recorded[0].1, UInt64(NSEvent.ModifierFlags.function.rawValue))
+        XCTAssertEqual(recorded[0].2, "fn")
+
+        // A reserved system Globe shortcut can also swallow fn-down. The
+        // focused recorder's state poller must detect the full transition
+        // without receiving either AppKit event.
+        recorded.removeAll()
+        recorder.observeFunctionModifierState(currentModifiers: [.function])
+        recorder.observeFunctionModifierState(currentModifiers: [])
+        XCTAssertEqual(recorded.count, 1)
+        XCTAssertEqual(recorded[0].0, 63)
+        XCTAssertEqual(recorded[0].1, UInt64(NSEvent.ModifierFlags.function.rawValue))
+        XCTAssertEqual(recorded[0].2, "fn")
+
+        // Persistent state such as Caps Lock must not make fn look as if it
+        // were still held after the physical key has been released.
+        recorded.removeAll()
+        let fnDownWithCapsLock = try XCTUnwrap(NSEvent.keyEvent(
+            with: .flagsChanged,
+            location: .zero,
+            modifierFlags: [.function, .capsLock],
+            timestamp: 0.11,
+            windowNumber: 0,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: 63
+        ))
+        let fnUpWithCapsLock = try XCTUnwrap(NSEvent.keyEvent(
+            with: .flagsChanged,
+            location: .zero,
+            modifierFlags: [.capsLock],
+            timestamp: 0.12,
+            windowNumber: 0,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: 63
+        ))
+        recorder.flagsChanged(with: fnDownWithCapsLock)
+        recorder.flagsChanged(with: fnUpWithCapsLock)
+        XCTAssertEqual(recorded.count, 1)
+        XCTAssertEqual(recorded[0].2, "fn")
+
         recorded.removeAll()
         let commandDown = try XCTUnwrap(NSEvent.keyEvent(
             with: .flagsChanged,
@@ -2191,6 +2245,28 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(monitorRecords.count, 1)
         XCTAssertEqual(monitorRecords[0].2, "fn")
         XCTAssertFalse(window.firstResponder === monitoredRecorder)
+
+        // Losing focus to a macOS Globe action must not discard fn before the
+        // live modifier-state fallback observes its release.
+        XCTAssertTrue(window.makeFirstResponder(monitoredRecorder))
+        XCTAssertNil(monitoredRecorder.handleLocallyMonitoredModifierEvent(fnDown))
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        monitoredRecorder.observeFunctionModifierState(currentModifiers: [])
+        XCTAssertEqual(monitorRecords.count, 2)
+        XCTAssertEqual(monitorRecords[1].2, "fn")
+
+        let autoFocusedRecorder = ShortcutRecorderNSView(
+            frame: NSRect(x: 0, y: 0, width: 180, height: 40)
+        )
+        autoFocusedRecorder.automaticallyActivates = true
+        let autoFocusWindow = NSWindow(
+            contentRect: autoFocusedRecorder.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        autoFocusWindow.contentView = autoFocusedRecorder
+        XCTAssertTrue(autoFocusWindow.firstResponder === autoFocusedRecorder)
     }
 
     func testSmartActionsResolveToSequencesAndAppearInTheActionLibrary() {

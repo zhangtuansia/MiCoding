@@ -2442,12 +2442,14 @@ private struct SmartActionStepDropDelegate: DropDelegate {
 struct ShortcutRecorderField: NSViewRepresentable {
     let displayName: String
     var showsPlaceholder = false
+    var automaticallyActivates = false
     let onRecord: (UInt16, UInt64, String) -> Void
 
     func makeNSView(context: Context) -> ShortcutRecorderNSView {
         let view = ShortcutRecorderNSView()
         view.displayName = displayName
         view.showsPlaceholder = showsPlaceholder
+        view.automaticallyActivates = automaticallyActivates
         view.onRecord = onRecord
         return view
     }
@@ -2455,6 +2457,7 @@ struct ShortcutRecorderField: NSViewRepresentable {
     func updateNSView(_ nsView: ShortcutRecorderNSView, context: Context) {
         nsView.displayName = displayName
         nsView.showsPlaceholder = showsPlaceholder
+        nsView.automaticallyActivates = automaticallyActivates
         nsView.onRecord = onRecord
         nsView.needsDisplay = true
     }
@@ -2463,15 +2466,35 @@ struct ShortcutRecorderField: NSViewRepresentable {
 final class ShortcutRecorderNSView: NSView {
     var displayName = "Return"
     var showsPlaceholder = false
+    var automaticallyActivates = false {
+        didSet {
+            if !automaticallyActivates {
+                hasAutomaticallyActivated = false
+            }
+            activateIfNeeded()
+        }
+    }
     var onRecord: ((UInt16, UInt64, String) -> Void)?
     private var pendingModifierKeyCode: UInt16?
     private var pendingModifierFlags: NSEvent.ModifierFlags = []
     private var localModifierMonitor: Any?
+    private var modifierStateTimer: Timer?
+    private var lastObservedFunctionState = false
+    private var hasAutomaticallyActivated = false
+
+    private static let recordableModifierMask: NSEvent.ModifierFlags = [
+        .control,
+        .option,
+        .shift,
+        .command,
+        .function
+    ]
 
     override var acceptsFirstResponder: Bool { true }
 
     isolated deinit {
         stopLocalModifierMonitor()
+        stopModifierStatePolling()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -2483,13 +2506,25 @@ final class ShortcutRecorderNSView: NSView {
     override func becomeFirstResponder() -> Bool {
         guard super.becomeFirstResponder() else { return false }
         startLocalModifierMonitor()
+        startModifierStatePolling()
         needsDisplay = true
         return true
     }
 
     override func resignFirstResponder() -> Bool {
         stopLocalModifierMonitor()
-        clearPendingModifiers()
+        let liveModifiers = Self.currentHardwareModifiers()
+        if liveModifiers.contains(.function),
+           !pendingModifierFlags.contains(.function) {
+            beginFunctionModifier(with: liveModifiers)
+        }
+        // A system Globe/fn action can move focus before AppKit delivers the
+        // release event. Keep that one pending state alive for the live-state
+        // poller; all ordinary modifier recordings are cancelled on blur.
+        if pendingModifierKeyCode != 63 || !pendingModifierFlags.contains(.function) {
+            stopModifierStatePolling()
+            clearPendingModifiers()
+        }
         needsDisplay = true
         return super.resignFirstResponder()
     }
@@ -2498,7 +2533,10 @@ final class ShortcutRecorderNSView: NSView {
         super.viewDidMoveToWindow()
         if window == nil {
             stopLocalModifierMonitor()
+            stopModifierStatePolling()
             clearPendingModifiers()
+        } else {
+            activateIfNeeded()
         }
     }
 
@@ -2516,7 +2554,18 @@ final class ShortcutRecorderNSView: NSView {
     }
 
     private func handleModifierEvent(_ event: NSEvent) {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let modifiers = event.modifierFlags.intersection(Self.recordableModifierMask)
+
+        // Globe/fn is the only modifier that commonly has its release event
+        // intercepted by a macOS action (input-source switching, dictation or
+        // Emoji & Symbols). Treat its physical key code independently from
+        // the other active modifiers so Caps Lock or Command cannot prevent
+        // the pending fn press from being committed.
+        if event.keyCode == 63 {
+            observeFunctionModifierState(currentModifiers: modifiers)
+            return
+        }
+
         if !modifiers.isEmpty {
             pendingModifierKeyCode = event.keyCode
             pendingModifierFlags.formUnion(modifiers)
@@ -2528,13 +2577,7 @@ final class ShortcutRecorderNSView: NSView {
               !pendingModifierFlags.isEmpty else {
             return
         }
-        let flags = pendingModifierFlags
-        clearPendingModifiers()
-        finishRecording(
-            keyCode: keyCode,
-            flags: flags,
-            name: Self.displayName(keyCode: keyCode, characters: nil, modifiers: flags)
-        )
+        commitPendingModifiers(keyCode: keyCode)
     }
 
     /// AppKit normally sends Command-based combinations through the menu's
@@ -2589,7 +2632,7 @@ final class ShortcutRecorderNSView: NSView {
     }
 
     private func record(_ event: NSEvent) {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let modifiers = event.modifierFlags.intersection(Self.recordableModifierMask)
         clearPendingModifiers()
         let name = Self.displayName(
             keyCode: event.keyCode,
@@ -2604,6 +2647,7 @@ final class ShortcutRecorderNSView: NSView {
         flags: NSEvent.ModifierFlags,
         name: String
     ) {
+        stopModifierStatePolling()
         onRecord?(keyCode, UInt64(flags.rawValue), name)
         window?.makeFirstResponder(nil)
         needsDisplay = true
@@ -2634,9 +2678,85 @@ final class ShortcutRecorderNSView: NSView {
         self.localModifierMonitor = nil
     }
 
+    /// `NSEvent.modifierFlags` reports the live combined keyboard state even
+    /// when no corresponding AppKit event was delivered to this view. Observe
+    /// it for the recorder's entire focused lifetime so a system Globe action
+    /// cannot hide both the fn-down and fn-up events from AppKit.
+    private func startModifierStatePolling() {
+        guard modifierStateTimer == nil else { return }
+        lastObservedFunctionState = Self.currentHardwareModifiers().contains(.function)
+        let timer = Timer(timeInterval: 0.01, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.observeFunctionModifierState(
+                    currentModifiers: Self.currentHardwareModifiers()
+                )
+            }
+        }
+        modifierStateTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private static func currentHardwareModifiers() -> NSEvent.ModifierFlags {
+        var modifiers = NSEvent.modifierFlags.intersection(recordableModifierMask)
+        let hardwareFlags = CGEventSource.flagsState(.hidSystemState)
+        if hardwareFlags.contains(.maskSecondaryFn) {
+            modifiers.insert(.function)
+        }
+        return modifiers
+    }
+
+    private func stopModifierStatePolling() {
+        modifierStateTimer?.invalidate()
+        modifierStateTimer = nil
+        lastObservedFunctionState = false
+    }
+
+    func observeFunctionModifierState(
+        currentModifiers: NSEvent.ModifierFlags
+    ) {
+        let modifiers = currentModifiers.intersection(Self.recordableModifierMask)
+        let functionIsDown = modifiers.contains(.function)
+        guard functionIsDown != lastObservedFunctionState else { return }
+        lastObservedFunctionState = functionIsDown
+
+        if functionIsDown {
+            beginFunctionModifier(with: modifiers)
+        } else if pendingModifierKeyCode == 63,
+                  pendingModifierFlags.contains(.function) {
+            commitPendingModifiers()
+        }
+    }
+
+    private func beginFunctionModifier(with modifiers: NSEvent.ModifierFlags) {
+        pendingModifierKeyCode = 63
+        pendingModifierFlags.formUnion(modifiers)
+        pendingModifierFlags.insert(.function)
+        needsDisplay = true
+    }
+
+    private func commitPendingModifiers(keyCode explicitKeyCode: UInt16? = nil) {
+        guard let keyCode = explicitKeyCode ?? pendingModifierKeyCode,
+              !pendingModifierFlags.isEmpty else { return }
+        let flags = pendingModifierFlags
+        clearPendingModifiers()
+        finishRecording(
+            keyCode: keyCode,
+            flags: flags,
+            name: Self.displayName(keyCode: keyCode, characters: nil, modifiers: flags)
+        )
+    }
+
     private func clearPendingModifiers() {
         pendingModifierKeyCode = nil
         pendingModifierFlags = []
+    }
+
+    private func activateIfNeeded() {
+        guard automaticallyActivates,
+              !hasAutomaticallyActivated,
+              window != nil else { return }
+        hasAutomaticallyActivated = true
+        window?.makeFirstResponder(self)
     }
 
     static func displayName(

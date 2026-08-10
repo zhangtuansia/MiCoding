@@ -599,7 +599,8 @@ private struct CompactActionRow: View {
 
             ShortcutRecorderField(
                 displayName: isRecordedKeyboardShortcut ? action.subtitle : "按下按键组合",
-                showsPlaceholder: !isRecordedKeyboardShortcut
+                showsPlaceholder: !isRecordedKeyboardShortcut,
+                automaticallyActivates: showsShortcutRecorder
             ) { keyCode, flags, displayName in
                 store.assignRecordedKeyboardShortcut(
                     keyCode: keyCode,
