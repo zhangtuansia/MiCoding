@@ -1,0 +1,160 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version written into the app (leave blank to use Info.plist)"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: micoding-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-dmg:
+    name: Universal macOS DMG
+    runs-on: macos-14
+    env:
+      MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+      REQUESTED_VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Resolve release version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          elif [[ -n "$REQUESTED_VERSION" ]]; then
+            version="$REQUESTED_VERSION"
+          else
+            version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          fi
+          if [[ ! "$version" =~ ^[0-9]+([.][0-9A-Za-z-]+)*$ ]]; then
+            echo "Invalid version: $version" >&2
+            exit 1
+          fi
+          echo "MICODING_VERSION=$version" >> "$GITHUB_ENV"
+          echo "MICODING_BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "DMG_PATH=$GITHUB_WORKSPACE/build/distribution/MiCoding-$version.dmg" >> "$GITHUB_ENV"
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Run tests
+        run: swift test --quiet
+
+      - name: Import Developer ID certificate when configured
+        shell: bash
+        run: |
+          if [[ -z "$MACOS_CERTIFICATE_P12_BASE64" || -z "$MACOS_CERTIFICATE_PASSWORD" ]]; then
+            echo "No Developer ID certificate configured; producing an ad-hoc signed prerelease build."
+            echo "MICODING_CODESIGN_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "DISTRIBUTION_SIGNED=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          keychain_path="$RUNNER_TEMP/micoding-build.keychain-db"
+          keychain_password=$(uuidgen)
+          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          identity=$(security find-identity -v -p codesigning "$keychain_path" \
+            | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' \
+            | head -1)
+          if [[ -z "$identity" ]]; then
+            echo "The P12 does not contain a Developer ID Application identity." >&2
+            exit 1
+          fi
+          echo "MICODING_CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "DISTRIBUTION_SIGNED=true" >> "$GITHUB_ENV"
+
+      - name: Build universal app and DMG
+        run: ./scripts/package-distribution.sh
+
+      - name: Notarize when credentials are configured
+        shell: bash
+        run: |
+          if [[ "$DISTRIBUTION_SIGNED" != "true" ]]; then
+            echo "Skipping notarization for ad-hoc build."
+            echo "DISTRIBUTION_NOTARIZED=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [[ -z "$APP_STORE_CONNECT_API_KEY_ID" \
+             || -z "$APP_STORE_CONNECT_API_ISSUER_ID" \
+             || -z "$APP_STORE_CONNECT_API_KEY_P8_BASE64" ]]; then
+            echo "Signing is configured but notarization credentials are missing." >&2
+            exit 1
+          fi
+          ./scripts/notarize-dmg.sh "$DMG_PATH"
+          echo "DISTRIBUTION_NOTARIZED=true" >> "$GITHUB_ENV"
+
+      - name: Verify distributable
+        shell: bash
+        run: |
+          hdiutil verify "$DMG_PATH"
+          mount_point="$RUNNER_TEMP/micoding-dmg"
+          mkdir -p "$mount_point"
+          device=$(hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$mount_point" \
+            | awk '/Apple_APFS|Apple_HFS/ {print $1; exit}')
+          test -d "$mount_point/MiCoding.app"
+          test -L "$mount_point/Applications"
+          lipo -archs "$mount_point/MiCoding.app/Contents/MacOS/XiaomiRemoteStudio" \
+            | grep -q arm64
+          lipo -archs "$mount_point/MiCoding.app/Contents/MacOS/XiaomiRemoteStudio" \
+            | grep -q x86_64
+          codesign --verify --deep --strict "$mount_point/MiCoding.app"
+          hdiutil detach "$device"
+          if [[ "$DISTRIBUTION_NOTARIZED" == "true" ]]; then
+            spctl --assess --type open --context context:primary-signature -vv "$DMG_PATH"
+          fi
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiCoding-${{ env.MICODING_VERSION }}-macOS
+          path: |
+            ${{ env.DMG_PATH }}
+            ${{ env.DMG_PATH }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release for tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          release_flags=(--verify-tag --generate-notes --title "MiCoding $MICODING_VERSION")
+          if [[ "$DISTRIBUTION_NOTARIZED" != "true" ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            "$DMG_PATH#MiCoding $MICODING_VERSION universal macOS DMG" \
+            "$DMG_PATH.sha256#SHA-256 checksum" \
+            "${release_flags[@]}"

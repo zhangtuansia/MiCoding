@@ -85,6 +85,20 @@ open "build/MiCoding.app"
 
 打包脚本会优先使用钥匙串中可用的 Apple Development 证书，使输入监控和辅助功能授权在本机覆盖升级后保持稳定；没有开发证书时会退回 ad-hoc 签名。也可以通过 `MICODING_CODESIGN_IDENTITY` 显式指定签名身份。
 
+### GitHub Actions DMG
+
+仓库内置 `Build macOS DMG` 工作流：手动运行时会上传 14 天有效的 universal DMG 构建产物，推送 `v*` 标签时会自动创建 GitHub Release 并附加 `.dmg` 与 SHA-256 校验文件。
+
+没有配置 Apple 密钥时，工作流仍可生成 ad-hoc 签名的 DMG，但 tag 发布会标记为 Pre-release。面向普通用户分发前，应在仓库 Actions secrets 中配置：
+
+- `MACOS_CERTIFICATE_P12_BASE64`
+- `MACOS_CERTIFICATE_PASSWORD`
+- `APP_STORE_CONNECT_API_KEY_ID`
+- `APP_STORE_CONNECT_API_ISSUER_ID`
+- `APP_STORE_CONNECT_API_KEY_P8_BASE64`
+
+前两项用于 Developer ID Application 签名，后三项用于 Apple 公证。配置后，tag 构建才会作为正式 Release 发布。
+
 ## 权限说明
 
 MiCoding 只在实现对应功能时请求以下系统权限：
