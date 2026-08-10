@@ -70,6 +70,7 @@ enum DeviceDetailLayoutMetrics {
     static let globalParameterAddIconSize: CGFloat = 22.5
     static let globalParameterAddIconOpticalYOffset: CGFloat = -0.75
     static let globalParameterAddContentOpticalXOffset: CGFloat = -0.5
+    static let profileIconOpticalYOffset: CGFloat = 0
     static let trailingPanelWidth: CGFloat = 1_180 / 3
     // Options+ applies `rgba(0,0,0,.1) 5px 5px 48px` to the fixed trailing
     // configuration panel. SwiftUI's opacity curve is stronger at the edge;
@@ -614,7 +615,7 @@ private struct GlobalParameterProfileStrip: View {
                     GlobalProfileIcon()
                         .foregroundStyle(AppTheme.accent(for: colorScheme))
                         .frame(width: 30, height: 30)
-                        .offset(y: 3)
+                        .offset(y: DeviceDetailLayoutMetrics.profileIconOpticalYOffset)
 
                     Rectangle()
                         .fill(AppTheme.accent(for: colorScheme))
@@ -767,7 +768,7 @@ struct ProfileApplicationIcon: View {
         Group {
             if profile.id == "global" {
                 GlobalProfileIcon()
-                    .offset(y: 3)
+                    .offset(y: DeviceDetailLayoutMetrics.profileIconOpticalYOffset)
             } else if let applicationImage {
                 if profile.id == "chrome" || profile.id == "safari" {
                     Image(nsImage: applicationImage)

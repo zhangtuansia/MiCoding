@@ -2464,21 +2464,77 @@ final class ShortcutRecorderNSView: NSView {
     var displayName = "Return"
     var showsPlaceholder = false
     var onRecord: ((UInt16, UInt64, String) -> Void)?
+    private var pendingModifierKeyCode: UInt16?
+    private var pendingModifierFlags: NSEvent.ModifierFlags = []
+    private var localModifierMonitor: Any?
 
     override var acceptsFirstResponder: Bool { true }
 
+    isolated deinit {
+        stopLocalModifierMonitor()
+    }
+
     override func mouseDown(with event: NSEvent) {
+        clearPendingModifiers()
         window?.makeFirstResponder(self)
         needsDisplay = true
     }
 
+    override func becomeFirstResponder() -> Bool {
+        guard super.becomeFirstResponder() else { return false }
+        startLocalModifierMonitor()
+        needsDisplay = true
+        return true
+    }
+
     override func resignFirstResponder() -> Bool {
+        stopLocalModifierMonitor()
+        clearPendingModifiers()
         needsDisplay = true
         return super.resignFirstResponder()
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            stopLocalModifierMonitor()
+            clearPendingModifiers()
+        }
+    }
+
     override func keyDown(with event: NSEvent) {
         record(event)
+    }
+
+    /// Modifier-only keys such as `fn` emit `flagsChanged` instead of
+    /// `keyDown`. Keep the down-state pending and commit it only when the
+    /// modifiers are released. A following regular key cancels this pending
+    /// state and is recorded as the complete combination (for example ⌘C),
+    /// so pressing Command first never creates an accidental Command-only map.
+    override func flagsChanged(with event: NSEvent) {
+        handleModifierEvent(event)
+    }
+
+    private func handleModifierEvent(_ event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if !modifiers.isEmpty {
+            pendingModifierKeyCode = event.keyCode
+            pendingModifierFlags.formUnion(modifiers)
+            needsDisplay = true
+            return
+        }
+
+        guard let keyCode = pendingModifierKeyCode,
+              !pendingModifierFlags.isEmpty else {
+            return
+        }
+        let flags = pendingModifierFlags
+        clearPendingModifiers()
+        finishRecording(
+            keyCode: keyCode,
+            flags: flags,
+            name: Self.displayName(keyCode: keyCode, characters: nil, modifiers: flags)
+        )
     }
 
     /// AppKit normally sends Command-based combinations through the menu's
@@ -2506,7 +2562,19 @@ final class ShortcutRecorderNSView: NSView {
         path.lineWidth = 1
         path.stroke()
 
-        let text = window?.firstResponder === self ? "请按下快捷键…" : displayName
+        let isRecording = window?.firstResponder === self
+        let text: String
+        if isRecording,
+           let pendingModifierKeyCode,
+           !pendingModifierFlags.isEmpty {
+            text = Self.displayName(
+                keyCode: pendingModifierKeyCode,
+                characters: "",
+                modifiers: pendingModifierFlags
+            )
+        } else {
+            text = isRecording ? "请按下快捷键…" : displayName
+        }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 13, weight: .medium),
             .foregroundColor: showsPlaceholder && window?.firstResponder !== self
@@ -2522,14 +2590,53 @@ final class ShortcutRecorderNSView: NSView {
 
     private func record(_ event: NSEvent) {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        clearPendingModifiers()
         let name = Self.displayName(
             keyCode: event.keyCode,
             characters: event.charactersIgnoringModifiers,
             modifiers: modifiers
         )
-        onRecord?(event.keyCode, UInt64(modifiers.rawValue), name)
+        finishRecording(keyCode: event.keyCode, flags: modifiers, name: name)
+    }
+
+    private func finishRecording(
+        keyCode: UInt16,
+        flags: NSEvent.ModifierFlags,
+        name: String
+    ) {
+        onRecord?(keyCode, UInt64(flags.rawValue), name)
         window?.makeFirstResponder(nil)
         needsDisplay = true
+    }
+
+    /// A focused view does not reliably receive the globe/fn event when the
+    /// user has assigned that key to a macOS action such as switching input
+    /// sources or opening Emoji & Symbols. A local monitor runs before normal
+    /// AppKit dispatch, records the modifier, and consumes it only while this
+    /// field is actively listening.
+    private func startLocalModifierMonitor() {
+        guard localModifierMonitor == nil else { return }
+        localModifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) {
+            [weak self] event in
+            self?.handleLocallyMonitoredModifierEvent(event) ?? event
+        }
+    }
+
+    func handleLocallyMonitoredModifierEvent(_ event: NSEvent) -> NSEvent? {
+        guard window?.firstResponder === self else { return event }
+        handleModifierEvent(event)
+        return nil
+    }
+
+    private func stopLocalModifierMonitor() {
+        guard let localModifierMonitor else { return }
+        NSEvent.removeMonitor(localModifierMonitor)
+        self.localModifierMonitor = nil
+    }
+
+    private func clearPendingModifiers() {
+        pendingModifierKeyCode = nil
+        pendingModifierFlags = []
     }
 
     static func displayName(
@@ -2537,6 +2644,9 @@ final class ShortcutRecorderNSView: NSView {
         characters: String?,
         modifiers: NSEvent.ModifierFlags
     ) -> String {
+        if keyCode == 63, modifiers == [.function] {
+            return "fn"
+        }
         var result = ""
         if modifiers.contains(.control) { result += "⌃" }
         if modifiers.contains(.option) { result += "⌥" }
@@ -2581,7 +2691,7 @@ final class ShortcutRecorderNSView: NSView {
         case 126: "↑"
         default: characters?.uppercased() ?? "Key \(keyCode)"
         }
-        return result + keyName
+        return (result + keyName).trimmingCharacters(in: .whitespaces)
     }
 }
 

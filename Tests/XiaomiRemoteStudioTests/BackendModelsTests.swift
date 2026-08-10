@@ -2062,7 +2062,7 @@ final class BackendModelsTests: XCTestCase {
     }
 
     @MainActor
-    func testAdvancedShortcutNamesCoverModifiersFunctionAndNavigationKeys() {
+    func testAdvancedShortcutNamesCoverModifiersFunctionAndNavigationKeys() throws {
         XCTAssertEqual(
             ShortcutRecorderNSView.displayName(
                 keyCode: 1,
@@ -2087,6 +2087,110 @@ final class BackendModelsTests: XCTestCase {
             ),
             "⌥Page Down"
         )
+        XCTAssertEqual(
+            ShortcutRecorderNSView.displayName(
+                keyCode: 63,
+                characters: nil,
+                modifiers: [.function]
+            ),
+            "fn"
+        )
+        XCTAssertEqual(
+            ShortcutRecorderNSView.displayName(
+                keyCode: 122,
+                characters: nil,
+                modifiers: [.function]
+            ),
+            "fn F1"
+        )
+
+        let recorder = ShortcutRecorderNSView(frame: NSRect(x: 0, y: 0, width: 180, height: 40))
+        var recorded: [(UInt16, UInt64, String)] = []
+        recorder.onRecord = { recorded.append(($0, $1, $2)) }
+
+        let fnDown = try XCTUnwrap(NSEvent.keyEvent(
+            with: .flagsChanged,
+            location: .zero,
+            modifierFlags: [.function],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: 63
+        ))
+        let fnUp = try XCTUnwrap(NSEvent.keyEvent(
+            with: .flagsChanged,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0.1,
+            windowNumber: 0,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: 63
+        ))
+        recorder.flagsChanged(with: fnDown)
+        XCTAssertTrue(recorded.isEmpty)
+        recorder.flagsChanged(with: fnUp)
+        XCTAssertEqual(recorded.count, 1)
+        XCTAssertEqual(recorded[0].0, 63)
+        XCTAssertEqual(recorded[0].1, UInt64(NSEvent.ModifierFlags.function.rawValue))
+        XCTAssertEqual(recorded[0].2, "fn")
+
+        recorded.removeAll()
+        let commandDown = try XCTUnwrap(NSEvent.keyEvent(
+            with: .flagsChanged,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0.2,
+            windowNumber: 0,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: 55
+        ))
+        let commandC = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0.3,
+            windowNumber: 0,
+            context: nil,
+            characters: "c",
+            charactersIgnoringModifiers: "c",
+            isARepeat: false,
+            keyCode: 8
+        ))
+        recorder.flagsChanged(with: commandDown)
+        recorder.keyDown(with: commandC)
+        recorder.flagsChanged(with: fnUp)
+        XCTAssertEqual(recorded.count, 1)
+        XCTAssertEqual(recorded[0].2, "⌘C")
+
+        let monitoredRecorder = ShortcutRecorderNSView(
+            frame: NSRect(x: 0, y: 0, width: 180, height: 40)
+        )
+        let window = NSWindow(
+            contentRect: monitoredRecorder.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = monitoredRecorder
+        XCTAssertTrue(window.makeFirstResponder(monitoredRecorder))
+
+        var monitorRecords: [(UInt16, UInt64, String)] = []
+        monitoredRecorder.onRecord = { monitorRecords.append(($0, $1, $2)) }
+        XCTAssertNil(monitoredRecorder.handleLocallyMonitoredModifierEvent(fnDown))
+        XCTAssertTrue(monitorRecords.isEmpty)
+        XCTAssertNil(monitoredRecorder.handleLocallyMonitoredModifierEvent(fnUp))
+        XCTAssertEqual(monitorRecords.count, 1)
+        XCTAssertEqual(monitorRecords[0].2, "fn")
+        XCTAssertFalse(window.firstResponder === monitoredRecorder)
     }
 
     func testSmartActionsResolveToSequencesAndAppearInTheActionLibrary() {
@@ -2530,6 +2634,9 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(RemoteCanvasMetrics.calloutVerticalPadding, 10)
         XCTAssertEqual(RemoteCanvasMetrics.calloutMinimumHeight, 58.4)
         XCTAssertEqual(RemoteCanvasMetrics.calloutTextYOffset, 0)
+        XCTAssertEqual(RemoteCanvasMetrics.calloutColumnWidth, 180)
+        XCTAssertEqual(RemoteCanvasMetrics.calloutInnerGap, 88)
+        XCTAssertEqual(DeviceDetailLayoutMetrics.profileIconOpticalYOffset, 0)
     }
 
     func testHomeDeviceCardKeepsTheReferenceProductHierarchyForSilverHardware() {

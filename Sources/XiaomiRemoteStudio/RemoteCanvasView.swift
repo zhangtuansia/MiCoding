@@ -27,6 +27,11 @@ enum RemoteCanvasMetrics {
     static let calloutVerticalPadding: CGFloat = 10
     static let calloutMinimumHeight: CGFloat = 58.4
     static let calloutTextYOffset: CGFloat = 0
+    // Keep the two callout columns edge-aligned. Positioning every card by
+    // its center made different label widths look as if the controls were
+    // drifting around the product.
+    static let calloutColumnWidth: CGFloat = 180
+    static let calloutInnerGap: CGFloat = 88
 
     static func imageHeight(for viewportHeight: CGFloat) -> CGFloat {
         min(max(viewportHeight - 154, 440), 462)
@@ -102,7 +107,11 @@ struct RemoteCanvasView: View {
 
                 ForEach(RemoteControlCallout.primaryCallouts) { callout in
                     let activeSlot = callout.activeSlot(selectedSlotID: store.selectedSlotID)
-                    let labelX = remoteCenterX + HotspotLabelPlacement.horizontalOffset(for: callout.id)
+                    let side = HotspotLabelPlacement.side(for: callout.id)
+                    let columnHalfWidth = RemoteCanvasMetrics.calloutColumnWidth / 2
+                    let labelX = remoteCenterX
+                        + side.direction
+                        * (RemoteCanvasMetrics.calloutInnerGap + columnHalfWidth)
                     let labelY = RemoteCanvasMetrics.calloutViewportTop
                         + HotspotLabelPlacement.verticalFraction(for: callout.id)
                         * RemoteCanvasMetrics.calloutLayoutHeight
@@ -113,8 +122,15 @@ struct RemoteCanvasView: View {
                         action: store.action(for: activeSlot.id, trigger: store.selectedTrigger),
                         selected: callout.slotIDs.contains(store.selectedSlotID ?? "")
                     )
+                    .frame(
+                        width: RemoteCanvasMetrics.calloutColumnWidth,
+                        alignment: side.alignment
+                    )
                     .position(
-                        x: min(max(labelX, 76), proxy.size.width - 76),
+                        x: min(
+                            max(labelX, columnHalfWidth),
+                            proxy.size.width - columnHalfWidth
+                        ),
                         y: min(max(labelY, 34), proxy.size.height - 34)
                     )
                 }
@@ -141,17 +157,18 @@ private enum PerspectiveHotspotPlacement {
 }
 
 private enum HotspotLabelPlacement {
-    static func horizontalOffset(for calloutID: String) -> CGFloat {
+    enum Side {
+        case left
+        case right
+
+        var direction: CGFloat { self == .left ? -1 : 1 }
+        var alignment: Alignment { self == .left ? .trailing : .leading }
+    }
+
+    static func side(for calloutID: String) -> Side {
         switch calloutID {
-        case "power": -140
-        case "voice": 140
-        case "navigation": -145
-        case "back": -145
-        case "home": -145
-        case "volume": 145
-        case "menu": -145
-        case "tv": 145
-        default: 160
+        case "power", "navigation", "back", "home", "menu": .left
+        default: .right
         }
     }
 
@@ -159,10 +176,10 @@ private enum HotspotLabelPlacement {
         switch calloutID {
         case "power", "voice": 0.09
         case "navigation": 0.24
-        case "back": 0.40
+        case "back": 0.38
         case "volume": 0.43
-        case "home": 0.525
-        case "menu", "tv": 0.65
+        case "home": 0.51
+        case "menu", "tv": 0.64
         default: 0.50
         }
     }
