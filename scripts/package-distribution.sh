@@ -86,6 +86,9 @@ if [[ "$signing_identity" != "-" ]]; then
 fi
 
 rm -rf -- "$staging_dir"
-shasum -a 256 "$dmg_path" > "$checksum_path"
+(
+    cd "$output_dir"
+    shasum -a 256 "${dmg_path:t}"
+) > "$checksum_path"
 hdiutil verify "$dmg_path"
 print "$dmg_path"

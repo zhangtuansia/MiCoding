@@ -135,6 +135,9 @@ jobs:
       - name: Verify distributable
         shell: bash
         run: |
+          checksum_dir=$(dirname "$DMG_PATH")
+          checksum_file=$(basename "$DMG_PATH.sha256")
+          (cd "$checksum_dir" && shasum -a 256 -c "$checksum_file")
           hdiutil verify "$DMG_PATH"
           mount_point="$RUNNER_TEMP/micoding-dmg"
           mkdir -p "$mount_point"
