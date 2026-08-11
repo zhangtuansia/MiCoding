@@ -64,10 +64,10 @@ jobs:
               selected_developer_dir="$developer_dir"
               break
             fi
-          done < <(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort -Vr)
+          done < <(find /Applications -maxdepth 1 -type d -name 'Xcode_16*.app' -print | sort -Vr)
 
           if [[ -z "$selected_developer_dir" ]]; then
-            echo "No installed Xcode contains Swift 6." >&2
+            echo "No installed Xcode 16 toolchain contains Swift 6." >&2
             exit 1
           fi
           echo "DEVELOPER_DIR=$selected_developer_dir" >> "$GITHUB_ENV"
