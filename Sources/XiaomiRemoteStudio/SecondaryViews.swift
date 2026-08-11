@@ -2492,11 +2492,6 @@ final class ShortcutRecorderNSView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
-    isolated deinit {
-        stopLocalModifierMonitor()
-        stopModifierStatePolling()
-    }
-
     override func mouseDown(with event: NSEvent) {
         clearPendingModifiers()
         window?.makeFirstResponder(self)
@@ -2532,6 +2527,10 @@ final class ShortcutRecorderNSView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil {
+            // Keep AppKit resource cleanup in the view lifecycle instead of an
+            // `isolated deinit`, which is unavailable in Swift 6.0. Both event
+            // callbacks capture this view weakly, so this path also avoids a
+            // retain cycle when SwiftUI removes the representable.
             stopLocalModifierMonitor()
             stopModifierStatePolling()
             clearPendingModifiers()
