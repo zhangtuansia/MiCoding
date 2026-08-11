@@ -21,7 +21,7 @@ concurrency:
 jobs:
   build-dmg:
     name: Universal macOS DMG
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
       MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve release version
         shell: bash
@@ -53,10 +53,26 @@ jobs:
           echo "MICODING_BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           echo "DMG_PATH=$GITHUB_WORKSPACE/build/distribution/MiCoding-$version.dmg" >> "$GITHUB_ENV"
 
-      - name: Show toolchain
+      - name: Select a Swift 6 toolchain
+        shell: bash
         run: |
-          swift --version
-          xcodebuild -version
+          selected_developer_dir=""
+          while IFS= read -r xcode_path; do
+            developer_dir="$xcode_path/Contents/Developer"
+            swift_version=$(DEVELOPER_DIR="$developer_dir" xcrun swift --version 2>/dev/null || true)
+            if grep -q 'Apple Swift version 6' <<< "$swift_version"; then
+              selected_developer_dir="$developer_dir"
+              break
+            fi
+          done < <(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort -Vr)
+
+          if [[ -z "$selected_developer_dir" ]]; then
+            echo "No installed Xcode contains Swift 6." >&2
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$selected_developer_dir" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$selected_developer_dir" xcrun swift --version
+          DEVELOPER_DIR="$selected_developer_dir" xcodebuild -version
 
       - name: Run tests
         run: swift test --quiet
