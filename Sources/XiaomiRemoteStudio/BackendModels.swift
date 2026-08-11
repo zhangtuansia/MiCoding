@@ -126,6 +126,7 @@ indirect enum ActionCommand: Codable, Equatable, Sendable {
     case system(SystemActionName)
     case openApplication(bundleIdentifier: String)
     case openApplicationAtPath(String)
+    case focusApplicationInput(bundleIdentifier: String)
     case controlApplication(bundleIdentifier: String, operation: ApplicationActionOperation)
     case openURL(String)
     case openDefaultBrowser
@@ -191,18 +192,24 @@ indirect enum ActionCommand: Codable, Equatable, Sendable {
         ])
         case "explore-ai": .openURL("https://chatgpt.com")
         case "launch-micoding": .openApplication(bundleIdentifier: "io.xiaomiremote.studio")
-        case "open-codex": .openApplication(bundleIdentifier: "com.openai.codex")
-        case "open-claude": .openApplication(bundleIdentifier: "com.anthropic.claudefordesktop")
+        case "open-codex": .sequence([
+            .openApplication(bundleIdentifier: "com.openai.codex"),
+            .focusApplicationInput(bundleIdentifier: "com.openai.codex")
+        ])
+        case "open-claude": .sequence([
+            .openApplication(bundleIdentifier: "com.anthropic.claudefordesktop"),
+            .focusApplicationInput(bundleIdentifier: "com.anthropic.claudefordesktop")
+        ])
         case "start-dictation": .startDictation
         case "typeless-dictation": .hardwareKeyPassThrough
         case "voice-codex": .sequence([
             .openApplication(bundleIdentifier: "com.openai.codex"),
-            .delay(milliseconds: 650),
+            .focusApplicationInput(bundleIdentifier: "com.openai.codex"),
             .startDictation
         ])
         case "voice-claude": .sequence([
             .openApplication(bundleIdentifier: "com.anthropic.claudefordesktop"),
-            .delay(milliseconds: 650),
+            .focusApplicationInput(bundleIdentifier: "com.anthropic.claudefordesktop"),
             .startDictation
         ])
         case "ai-submit": .keyStroke(keyCode: 36, flags: 0)

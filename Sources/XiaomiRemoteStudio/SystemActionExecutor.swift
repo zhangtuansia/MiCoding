@@ -26,6 +26,8 @@ final class SystemActionExecutor: ActionExecuting {
             openApplication(bundleIdentifier: bundleIdentifier)
         case .openApplicationAtPath(let path):
             openApplication(atPath: path)
+        case .focusApplicationInput(let bundleIdentifier):
+            await focusApplicationInput(bundleIdentifier: bundleIdentifier)
         case let .controlApplication(bundleIdentifier, operation):
             controlApplication(bundleIdentifier: bundleIdentifier, operation: operation)
         case .openURL(let value):
@@ -212,6 +214,170 @@ final class SystemActionExecutor: ActionExecuting {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+    }
+
+    /// Focuses the prompt composer without relying on app-specific keyboard
+    /// shortcuts. Both Codex and Claude expose the actual editor as an
+    /// accessibility text area, even though it is deeply nested in web views.
+    /// A point hit-test near the bottom of the active window reaches that
+    /// editor immediately and avoids walking a very large accessibility tree.
+    private func focusApplicationInput(bundleIdentifier: String) async {
+        let supportedBundleIdentifiers = [
+            "com.openai.codex",
+            "com.anthropic.claudefordesktop"
+        ]
+        guard supportedBundleIdentifiers.contains(bundleIdentifier) else { return }
+
+        // Cold-starting either Electron app can take a few seconds. Retry
+        // long enough for its first window and web accessibility tree to load.
+        for attempt in 0..<40 {
+            guard let running = NSRunningApplication
+                .runningApplications(withBundleIdentifier: bundleIdentifier)
+                .first else {
+                if attempt == 0 {
+                    openApplication(bundleIdentifier: bundleIdentifier)
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+                continue
+            }
+
+            running.activate(options: [.activateAllWindows])
+            if focusPromptTextArea(processIdentifier: running.processIdentifier) {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    private func focusPromptTextArea(processIdentifier: pid_t) -> Bool {
+        let application = AXUIElementCreateApplication(processIdentifier)
+        guard let window = focusedWindow(in: application),
+              let origin = accessibilityPoint(
+                  of: window,
+                  attribute: kAXPositionAttribute as CFString
+              ),
+              let size = accessibilitySize(
+                  of: window,
+                  attribute: kAXSizeAttribute as CFString
+              ),
+              size.width > 0,
+              size.height > 0 else {
+            return false
+        }
+
+        // Prompt composers in both supported apps occupy the lower center of
+        // the content area. Multiple points cover compact, expanded and
+        // response-in-progress layouts without moving the user's pointer.
+        let candidates: [(x: CGFloat, y: CGFloat)] = [
+            (0.50, 0.94),
+            (0.58, 0.94),
+            (0.50, 0.90),
+            (0.58, 0.90),
+            (0.50, 0.86)
+        ]
+        for candidate in candidates {
+            let point = CGPoint(
+                x: origin.x + size.width * candidate.x,
+                y: origin.y + size.height * candidate.y
+            )
+            var hitElement: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(
+                application,
+                Float(point.x),
+                Float(point.y),
+                &hitElement
+            ) == .success,
+            let hitElement,
+            let textArea = editableAncestor(startingAt: hitElement) else {
+                continue
+            }
+            if AXUIElementSetAttributeValue(
+                textArea,
+                kAXFocusedAttribute as CFString,
+                kCFBooleanTrue
+            ) == .success {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func focusedWindow(in application: AXUIElement) -> AXUIElement? {
+        if let value = accessibilityValue(
+            of: application,
+            attribute: kAXFocusedWindowAttribute as CFString
+        ), CFGetTypeID(value) == AXUIElementGetTypeID() {
+            return unsafeDowncast(value, to: AXUIElement.self)
+        }
+        return (accessibilityValue(
+            of: application,
+            attribute: kAXWindowsAttribute as CFString
+        ) as? [AXUIElement])?.first
+    }
+
+    private func editableAncestor(
+        startingAt element: AXUIElement,
+        maximumDepth: Int = 8
+    ) -> AXUIElement? {
+        var current: AXUIElement? = element
+        for _ in 0..<maximumDepth {
+            guard let candidate = current else { return nil }
+            let role = accessibilityValue(
+                of: candidate,
+                attribute: kAXRoleAttribute as CFString
+            ) as? String
+            if role == (kAXTextAreaRole as String)
+                || role == (kAXTextFieldRole as String) {
+                var settable = DarwinBoolean(false)
+                if AXUIElementIsAttributeSettable(
+                    candidate,
+                    kAXFocusedAttribute as CFString,
+                    &settable
+                ) == .success,
+                settable.boolValue {
+                    return candidate
+                }
+            }
+
+            guard let parentValue = accessibilityValue(
+                of: candidate,
+                attribute: kAXParentAttribute as CFString
+            ), CFGetTypeID(parentValue) == AXUIElementGetTypeID() else {
+                return nil
+            }
+            current = unsafeDowncast(parentValue, to: AXUIElement.self)
+        }
+        return nil
+    }
+
+    private func accessibilityPoint(
+        of element: AXUIElement,
+        attribute: CFString
+    ) -> CGPoint? {
+        guard let value = accessibilityValue(of: element, attribute: attribute),
+              CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        guard AXValueGetValue(
+            unsafeDowncast(value, to: AXValue.self),
+            .cgPoint,
+            &point
+        ) else { return nil }
+        return point
+    }
+
+    private func accessibilitySize(
+        of element: AXUIElement,
+        attribute: CFString
+    ) -> CGSize? {
+        guard let value = accessibilityValue(of: element, attribute: attribute),
+              CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var size = CGSize.zero
+        guard AXValueGetValue(
+            unsafeDowncast(value, to: AXValue.self),
+            .cgSize,
+            &size
+        ) else { return nil }
+        return size
     }
 
     private func controlApplication(

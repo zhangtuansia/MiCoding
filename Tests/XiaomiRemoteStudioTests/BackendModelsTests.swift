@@ -1881,10 +1881,24 @@ final class BackendModelsTests: XCTestCase {
             .openURL("https://chatgpt.com")
         )
         XCTAssertEqual(
+            ActionCommand.command(for: "open-codex"),
+            .sequence([
+                .openApplication(bundleIdentifier: "com.openai.codex"),
+                .focusApplicationInput(bundleIdentifier: "com.openai.codex")
+            ])
+        )
+        XCTAssertEqual(
+            ActionCommand.command(for: "open-claude"),
+            .sequence([
+                .openApplication(bundleIdentifier: "com.anthropic.claudefordesktop"),
+                .focusApplicationInput(bundleIdentifier: "com.anthropic.claudefordesktop")
+            ])
+        )
+        XCTAssertEqual(
             ActionCommand.command(for: "voice-codex"),
             .sequence([
                 .openApplication(bundleIdentifier: "com.openai.codex"),
-                .delay(milliseconds: 650),
+                .focusApplicationInput(bundleIdentifier: "com.openai.codex"),
                 .startDictation
             ])
         )
@@ -1892,7 +1906,7 @@ final class BackendModelsTests: XCTestCase {
             ActionCommand.command(for: "voice-claude"),
             .sequence([
                 .openApplication(bundleIdentifier: "com.anthropic.claudefordesktop"),
-                .delay(milliseconds: 650),
+                .focusApplicationInput(bundleIdentifier: "com.anthropic.claudefordesktop"),
                 .startDictation
             ])
         )
