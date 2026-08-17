@@ -478,9 +478,10 @@ enum SmartActionTrigger: Codable, Equatable, Sendable {
     case actionsRing
     case shortcut(keyCode: UInt16, flags: UInt64, name: String)
 
-    private static let supportedModifierMask = UInt64(
-        (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 23)
-    )
+    // control | shift | option | command | function. Keep this as one typed
+    // literal: Swift 6.0's constraint solver can time out on the equivalent
+    // chain of untyped shift expressions used by the macOS 15 CI toolchain.
+    private static let supportedModifierMask: UInt64 = 0x009E_0000
 
     var isValid: Bool {
         switch self {
