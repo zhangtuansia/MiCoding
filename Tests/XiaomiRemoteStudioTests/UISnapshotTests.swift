@@ -210,14 +210,40 @@ final class UISnapshotTests: XCTestCase {
             into: directory
         )
 
-        let connectionPickerStore = makeSnapshotStore()
-        connectionPickerStore.appearanceMode = .light
-        connectionPickerStore.useDarkAppearance = false
+        let connectionPickerStore = makeSnapshotStore(connected: false)
+        connectionPickerStore.removeManagedDevice(openBluetoothSettings: false)
+        connectionPickerStore.toastMessage = nil
         connectionPickerStore.beginAddingDevice()
         try render(
             view: AppShellView(),
             store: connectionPickerStore,
-            name: "connection-type-picker",
+            name: "connection-pairing-searching",
+            into: directory
+        )
+
+        let pairingConfigurationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiCoding-UISnapshots-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("config.json")
+        var pairingConfiguration = PersistedConfiguration(assignmentsByProfile: [:])
+        pairingConfiguration.remoteIsManaged = false
+        try LocalConfigurationStore(fileURL: pairingConfigurationURL).save(pairingConfiguration)
+        let discoveredRemoteStore = AppStore(
+            configurationStore: LocalConfigurationStore(fileURL: pairingConfigurationURL),
+            runtimeServicesEnabled: false,
+            initialDeviceSnapshot: BluetoothDeviceSnapshot(
+                batteryLevel: 100,
+                firmwareVersion: "2671"
+            )
+        )
+        discoveredRemoteStore.permissions = PermissionSnapshot(
+            accessibilityGranted: true,
+            inputMonitoringGranted: true
+        )
+        discoveredRemoteStore.beginAddingDevice()
+        try render(
+            view: AppShellView(),
+            store: discoveredRemoteStore,
+            name: "connection-pairing-found",
             into: directory
         )
 

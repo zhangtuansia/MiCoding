@@ -83,10 +83,11 @@ struct RemoteButtonSlot: Identifiable, Hashable {
     let shape: RemoteButtonShape
     let allowedCategories: Set<ActionCategory>
 
-    func accepts(_ action: RemoteAction) -> Bool {
-        allowedCategories.isEmpty
-            || action.category == .recommended
-            || allowedCategories.contains(action.category)
+    func accepts(_ action: RemoteAction, trigger: RemoteTrigger = .tap) -> Bool {
+        action.isEligible(for: .remoteButton(slotID: id, trigger: trigger))
+            && (allowedCategories.isEmpty
+                || action.category == .recommended
+                || allowedCategories.contains(action.category))
     }
 
     static let demoSlots: [RemoteButtonSlot] = [
@@ -126,6 +127,35 @@ enum ActionCategory: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+enum RemoteActionPlacement: Equatable {
+    case remoteButton(slotID: String, trigger: RemoteTrigger)
+    case actionsRing
+    case smartActionStep
+}
+
+enum RemoteActionEligibility: Hashable {
+    /// The action can be used anywhere, subject to the target button's
+    /// category restrictions.
+    case standard
+    /// Folder actions are navigation nodes owned by the Actions Ring runtime,
+    /// not executable commands that can be assigned elsewhere.
+    case actionsRingOnly
+    /// Hardware passthrough is meaningful only for the physical voice key's
+    /// primary press. Using it elsewhere would consume input without an action.
+    case voiceButtonTapOnly
+
+    func permits(_ placement: RemoteActionPlacement) -> Bool {
+        switch (self, placement) {
+        case (.standard, _), (.actionsRingOnly, .actionsRing):
+            true
+        case let (.voiceButtonTapOnly, .remoteButton(slotID: slotID, trigger: .tap)):
+            slotID == RemotePhysicalKey.voice.slotID
+        default:
+            false
+        }
+    }
+}
+
 struct RemoteAction: Identifiable, Hashable {
     let id: String
     let title: String
@@ -133,6 +163,29 @@ struct RemoteAction: Identifiable, Hashable {
     let symbol: String
     let category: ActionCategory
     let tint: Color
+    let eligibility: RemoteActionEligibility
+
+    init(
+        id: String,
+        title: String,
+        subtitle: String,
+        symbol: String,
+        category: ActionCategory,
+        tint: Color,
+        eligibility: RemoteActionEligibility = .standard
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.symbol = symbol
+        self.category = category
+        self.tint = tint
+        self.eligibility = eligibility
+    }
+
+    func isEligible(for placement: RemoteActionPlacement) -> Bool {
+        eligibility.permits(placement)
+    }
 
     var actionsRingParameterKind: ActionsRingParameterKind? {
         switch id {
@@ -164,7 +217,7 @@ struct RemoteAction: Identifiable, Hashable {
 
     static let catalog: [RemoteAction] = [
         .init(id: "show-actions-ring", title: "显示 Actions Ring", subtitle: "在指针位置打开快捷动作环", symbol: "circle-dot", category: .recommended, tint: .purple),
-        .init(id: "actions-ring-folder-work", title: "工作模式", subtitle: "文件夹 · 9 个常用工作操作", symbol: "folder.fill", category: .recommended, tint: .purple),
+        .init(id: "actions-ring-folder-work", title: "工作模式", subtitle: "文件夹 · 9 个常用工作操作", symbol: "folder.fill", category: .recommended, tint: .purple, eligibility: .actionsRingOnly),
         .init(id: "mission-control", title: "调度中心", subtitle: "查看所有窗口", symbol: "rectangle.3.group", category: .recommended, tint: .purple),
         .init(id: "spotlight", title: "Spotlight 效果", subtitle: "快速查找内容", symbol: "magnifyingglass", category: .recommended, tint: .indigo),
         .init(id: "copy", title: "复制", subtitle: "复制所选内容", symbol: "doc.on.doc", category: .recommended, tint: .blue),
@@ -205,7 +258,7 @@ struct RemoteAction: Identifiable, Hashable {
         .init(id: "open-codex", title: "打开 Codex", subtitle: "置于前台并聚焦输入框", symbol: "terminal", category: .apps, tint: .blue),
         .init(id: "open-claude", title: "打开 Claude", subtitle: "置于前台并聚焦输入框", symbol: "sparkles", category: .apps, tint: .orange),
         .init(id: "start-dictation", title: "开始语音输入", subtitle: "直接启动当前应用的系统听写", symbol: "mic.fill", category: .recommended, tint: .purple),
-        .init(id: "typeless-dictation", title: "Typeless 语音输入", subtitle: "遥控器语音键专用 · 硬件 F20", symbol: "mic.fill", category: .recommended, tint: .purple),
+        .init(id: "typeless-dictation", title: "Typeless 语音输入", subtitle: "遥控器语音键专用 · 硬件 F20", symbol: "mic.fill", category: .recommended, tint: .purple, eligibility: .voiceButtonTapOnly),
         .init(id: "voice-codex", title: "语音问 Codex", subtitle: "打开 Codex 并启动系统听写", symbol: "mic.fill", category: .recommended, tint: .blue),
         .init(id: "voice-claude", title: "语音问 Claude", subtitle: "打开 Claude 并启动系统听写", symbol: "mic.fill", category: .recommended, tint: .orange),
         .init(id: "ai-submit", title: "发送给 AI", subtitle: "发送当前提示词", symbol: "return", category: .recommended, tint: .green),
@@ -243,7 +296,7 @@ struct RemoteAction: Identifiable, Hashable {
         .init(id: "smart-ai-translate", title: "AI 英语翻译", subtitle: "用所选文本生成英语翻译提示词", symbol: "sparkles", category: .shortcut, tint: .purple),
         .init(id: "smart-ai-code", title: "AI 代码解释", subtitle: "用所选代码生成解释提示词", symbol: "sparkles", category: .shortcut, tint: .purple),
         .init(id: "smart-morning", title: "清晨设置", subtitle: "打开日历、备忘录和浏览器", symbol: "calendar", category: .shortcut, tint: .yellow),
-        .init(id: "smart-sports", title: "查看最新比分 ⚽", subtitle: "打开实时体育比分搜索", symbol: "globe", category: .shortcut, tint: .green),
+        .init(id: "smart-sports", title: "查看最新比分", subtitle: "打开实时体育比分搜索", symbol: "globe", category: .shortcut, tint: .green),
         .init(id: "smart-github", title: "打开 GitHub", subtitle: "打开 GitHub 工作台", symbol: "globe", category: .shortcut, tint: .gray),
         .init(id: "smart-developer-docs", title: "开发者文档", subtitle: "打开 Apple 开发者文档", symbol: "macwindow", category: .shortcut, tint: .blue)
     ]
@@ -407,7 +460,7 @@ struct SmartAction: Identifiable {
         .init(id: "ai-translate", actionID: "smart-ai-translate", title: "AI 英语翻译", subtitle: "选中文本后翻译为英语", symbol: "sparkles", tint: .purple, stepCount: 1),
         .init(id: "ai-code", actionID: "smart-ai-code", title: "AI 代码解释", subtitle: "选中代码后解释逻辑与问题", symbol: "sparkles", tint: .purple, stepCount: 1),
         .init(id: "morning", actionID: "smart-morning", title: "清晨设置", subtitle: "打开我常用的应用程序", symbol: "calendar", tint: .yellow, stepCount: 3),
-        .init(id: "sports", actionID: "smart-sports", title: "查看最新比分 ⚽", subtitle: "了解您支持的球队最新表现", symbol: "globe", tint: .green, stepCount: 1),
+        .init(id: "sports", actionID: "smart-sports", title: "查看最新比分", subtitle: "了解您支持的球队最新表现", symbol: "globe", tint: .green, stepCount: 1),
         .init(id: "browser", actionID: "smart-browser", title: "打开浏览器", subtitle: "立即打开默认浏览器", symbol: "safari.fill", tint: .blue, stepCount: 1),
         .init(id: "screenshot", actionID: "smart-screenshot", title: "快速截屏", subtitle: "截取当前屏幕并保存", symbol: "viewfinder", tint: .purple, stepCount: 1),
         .init(id: "notes-app", actionID: "smart-notes-app", title: "打开备忘录", subtitle: "立即打开备忘录应用", symbol: "note.text", tint: .yellow, stepCount: 1),
@@ -444,7 +497,7 @@ struct SmartAction: Identifiable {
         let persistedSteps = saved.steps ?? saved.stepActionIDs?.map(SmartActionStep.action)
         let effectiveSteps = persistedSteps ?? (template == nil ? [] : [.action(saved.actionID)])
         guard template != nil || !effectiveSteps.isEmpty,
-              effectiveSteps.allSatisfy({ $0.command != .none }) else {
+              effectiveSteps.allSatisfy(\.isValidForSmartAction) else {
             return nil
         }
 
@@ -486,6 +539,17 @@ struct SmartAction: Identifiable {
         )
     }
 
+    var isEligibleWorkflow: Bool {
+        if let steps {
+            return !steps.isEmpty && steps.allSatisfy(\.isValidForSmartAction)
+        }
+        guard let action = RemoteAction.catalog.first(where: { $0.id == actionID }) else {
+            return false
+        }
+        return action.isEligible(for: .smartActionStep)
+            && ActionCommand.command(for: actionID) != .none
+    }
+
     static func workflowStepCount(for actionIDs: [String]) -> Int {
         actionIDs.reduce(into: 0) { count, actionID in
             count += samples.first(where: { $0.actionID == actionID })?.stepCount ?? 1
@@ -520,6 +584,15 @@ struct SmartAction: Identifiable {
 }
 
 extension SmartActionStep {
+    var isValidForSmartAction: Bool {
+        guard isValid else { return false }
+        guard case let .action(actionID) = self,
+              let action = RemoteAction.catalog.first(where: { $0.id == actionID }) else {
+            return true
+        }
+        return action.isEligible(for: .smartActionStep)
+    }
+
     var title: String {
         switch self {
         case let .action(actionID):

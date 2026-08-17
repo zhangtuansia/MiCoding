@@ -76,13 +76,19 @@ struct ActionLibraryView: View {
     }
 
     private var installedSmartActions: [RemoteAction] {
-        store.installedSmartActionCatalog
+        store.installedSmartActionCatalog.filter(isAvailableForSelectedButton)
     }
 
     private var availableActions: [RemoteAction] {
-        RemoteAction.catalog.filter { $0.category != .shortcut }
-            + [chooseApplicationAction]
+        (RemoteAction.catalog.filter { $0.category != .shortcut }
+            + [chooseApplicationAction])
+            .filter(isAvailableForSelectedButton)
             + installedSmartActions
+    }
+
+    private func isAvailableForSelectedButton(_ action: RemoteAction) -> Bool {
+        guard let slot = store.selectedSlot else { return false }
+        return slot.accepts(action, trigger: store.selectedTrigger)
     }
 
     private var recommendedActions: [RemoteAction] {
@@ -97,11 +103,13 @@ struct ActionLibraryView: View {
         ]
         var actions = recommendedIDs.compactMap { id in
             RemoteAction.catalog.first(where: { $0.id == id })
-        }
-        if let shortcutIndex = actions.firstIndex(where: { $0.id == "keyboard-shortcut" }) {
-            actions.insert(chooseApplicationAction, at: shortcutIndex)
-        } else {
-            actions.append(chooseApplicationAction)
+        }.filter(isAvailableForSelectedButton)
+        if isAvailableForSelectedButton(chooseApplicationAction) {
+            if let shortcutIndex = actions.firstIndex(where: { $0.id == "keyboard-shortcut" }) {
+                actions.insert(chooseApplicationAction, at: shortcutIndex)
+            } else {
+                actions.append(chooseApplicationAction)
+            }
         }
         if let currentAction {
             if currentAction.id.hasPrefix("recorded-keyboard-shortcut-"),
@@ -110,7 +118,7 @@ struct ActionLibraryView: View {
                 return actions
             }
             let alreadyRecommended = actions.contains(where: { $0.id == currentAction.id })
-            if !alreadyRecommended {
+            if !alreadyRecommended, isAvailableForSelectedButton(currentAction) {
                 actions.insert(currentAction, at: 0)
             }
         }
@@ -131,14 +139,15 @@ struct ActionLibraryView: View {
                         categoryGroup(
                             .system,
                             title: "其他动作",
-                            actions: RemoteAction.catalog.filter { [.system, .media, .apps].contains($0.category) }
-                                + [chooseApplicationAction]
+                            actions: (RemoteAction.catalog.filter {
+                                [.system, .media, .apps].contains($0.category)
+                            } + [chooseApplicationAction])
+                                .filter(isAvailableForSelectedButton)
                         )
                     } else if searchResults.isEmpty {
-                        Text("结果")
-                            .font(.custom("AvenirNext-DemiBold", size: 14))
-                            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-                            .padding(.horizontal, 34)
+                        ActionLibraryEmptySearchView(query: normalizedQuery) {
+                            store.searchText = ""
+                        }
                     } else {
                         Text("结果")
                             .font(.custom("AvenirNext-DemiBold", size: 14))
@@ -226,7 +235,9 @@ struct ActionLibraryView: View {
     }
 
     private func actions(in category: ActionCategory) -> [RemoteAction] {
-        RemoteAction.catalog.filter { $0.category == category }
+        RemoteAction.catalog.filter {
+            $0.category == category && isAvailableForSelectedButton($0)
+        }
     }
 
     private func categoryGroup(
@@ -312,6 +323,42 @@ private struct SearchField: View {
         .padding(.trailing, 29)
         .frame(height: 48)
         .background(AppTheme.surface(for: colorScheme))
+    }
+}
+
+private struct ActionLibraryEmptySearchView: View {
+    let query: String
+    let clear: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            AppIcon(symbol: "search-x", size: 24)
+                .foregroundStyle(Color.secondary)
+                .frame(width: 44, height: 44)
+                .background(AppTheme.elevatedSurface(for: colorScheme).opacity(0.58))
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+            Text("没有找到动作")
+                .font(AppTypography.title)
+                .foregroundStyle(AppTheme.text(for: colorScheme))
+                .padding(.top, 16)
+
+            Text("“\(query)”没有匹配项")
+                .font(AppTypography.supporting)
+                .foregroundStyle(Color.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+                .padding(.top, 5)
+
+            Button("清除搜索", action: clear)
+                .buttonStyle(SecondaryActionButtonStyle(width: 112))
+                .padding(.top, 18)
+        }
+        .frame(maxWidth: .infinity, minHeight: 260, alignment: .center)
+        .accessibilityElement(children: .contain)
     }
 }
 

@@ -71,6 +71,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var profiles = AppProfile.profiles
     @Published private(set) var availableApplicationProfiles: [AppProfile] = []
     @Published private(set) var requestedAutomationCategory: String?
+    @Published private(set) var configurationLoadWarning: String?
     // Templates live in SmartAction.samples. This collection mirrors the
     // original Smart Actions “管理” tab and therefore only contains actions
     // the user has added, created, or imported.
@@ -81,6 +82,7 @@ final class AppStore: ObservableObject {
     private var actionsRingReturnsToExploreCenter = false
 
     private let configurationStore: LocalConfigurationStore
+    private let providedBackendCoordinator: BackendCoordinator?
     private var backendSettings = BackendSettings()
     private var holdAssignmentsByProfile: [String: [String: String]] = [:]
     private var doubleTapAssignmentsByProfile: [String: [String: String]] = [:]
@@ -92,6 +94,9 @@ final class AppStore: ObservableObject {
     private var lastBatteryRefreshDate: Date?
     private var lowBatteryWarningIssued = false
     private var remoteVoiceReportCount = 0
+    private var hasPresentedConfigurationLoadWarning = false
+    private var configurationPersistenceBlocked = false
+    private var hasPresentedConfigurationSaveWarning = false
     private let runtimeServicesEnabled: Bool
     private let actionsRingOverlayController = ActionsRingOverlayController()
 
@@ -123,7 +128,7 @@ final class AppStore: ObservableObject {
     ]
 
     lazy var backendCoordinator: BackendCoordinator = {
-        let coordinator = BackendCoordinator()
+        let coordinator = providedBackendCoordinator ?? BackendCoordinator()
         coordinator.configure(settings: backendSettings)
         coordinator.resolveActionID = { [weak self] bundleIdentifier, slotID, trigger in
             guard let self, !self.showsFeatureOverview else { return nil }
@@ -207,59 +212,71 @@ final class AppStore: ObservableObject {
     init(
         configurationStore: LocalConfigurationStore = LocalConfigurationStore(),
         runtimeServicesEnabled: Bool = true,
-        initialDeviceSnapshot: BluetoothDeviceSnapshot? = nil
+        initialDeviceSnapshot: BluetoothDeviceSnapshot? = nil,
+        backendCoordinator: BackendCoordinator? = nil
     ) {
         self.configurationStore = configurationStore
         self.runtimeServicesEnabled = runtimeServicesEnabled
+        self.providedBackendCoordinator = backendCoordinator
         var shouldPersistNormalizedSmartActions = false
-        if let saved = try? configurationStore.load() {
-            assignmentsByProfile = saved.assignmentsByProfile
-            migrateLegacyAssignments()
-            holdAssignmentsByProfile = saved.holdAssignmentsByProfile
-            doubleTapAssignmentsByProfile = saved.doubleTapAssignmentsByProfile
-            backendSettings = saved.settings
-            holdMilliseconds = saved.settings.holdMilliseconds
-            doubleTapMilliseconds = saved.settings.doubleTapMilliseconds
-            debounceMilliseconds = saved.settings.debounceMilliseconds ?? 30
-            restoreCustomProfiles()
-            appearanceMode = saved.appearanceMode ?? (saved.useDarkAppearance ? .dark : .system)
-            useDarkAppearance = appearanceMode == .dark
-            automaticUpdatesEnabled = saved.automaticUpdatesEnabled ?? true
-            remoteIsManaged = saved.remoteIsManaged ?? true
-            inputServiceEnabled = saved.inputServiceEnabled ?? true
-            showActionNotifications = saved.showActionNotifications ?? true
-            showPermissionReminders = saved.showPermissionReminders ?? true
-            showExperienceRecommendations = saved.showExperienceRecommendations ?? true
-            showConnectionNotifications = saved.showConnectionNotifications ?? true
-            showLowBatteryNotifications = saved.showLowBatteryNotifications ?? true
-            let savedRingActions = migratedActionsRingActionIDs(saved.actionsRingActionIDs ?? [])
-            let savedRingAssignments = (saved.actionsRingAssignmentsByProfile ?? [:])
-                .filter { $0.value.count == 8 }
-                .mapValues(migratedActionsRingActionIDs)
-            if !savedRingAssignments.isEmpty {
-                actionsRingAssignmentsByProfile = savedRingAssignments
-            } else if savedRingActions.count == 8 {
-                actionsRingAssignmentsByProfile = ["global": savedRingActions]
+        do {
+            if let saved = try configurationStore.load() {
+                assignmentsByProfile = saved.assignmentsByProfile
+                migrateLegacyAssignments()
+                holdAssignmentsByProfile = saved.holdAssignmentsByProfile
+                doubleTapAssignmentsByProfile = saved.doubleTapAssignmentsByProfile
+                backendSettings = saved.settings
+                holdMilliseconds = saved.settings.holdMilliseconds
+                doubleTapMilliseconds = saved.settings.doubleTapMilliseconds
+                debounceMilliseconds = saved.settings.debounceMilliseconds ?? 30
+                restoreCustomProfiles()
+                appearanceMode = saved.appearanceMode ?? (saved.useDarkAppearance ? .dark : .system)
+                useDarkAppearance = appearanceMode == .dark
+                automaticUpdatesEnabled = saved.automaticUpdatesEnabled ?? true
+                remoteIsManaged = saved.remoteIsManaged ?? true
+                inputServiceEnabled = saved.inputServiceEnabled ?? true
+                showActionNotifications = saved.showActionNotifications ?? true
+                showPermissionReminders = saved.showPermissionReminders ?? true
+                showExperienceRecommendations = saved.showExperienceRecommendations ?? true
+                showConnectionNotifications = saved.showConnectionNotifications ?? true
+                showLowBatteryNotifications = saved.showLowBatteryNotifications ?? true
+                let savedRingActions = migratedActionsRingActionIDs(saved.actionsRingActionIDs ?? [])
+                let savedRingAssignments = (saved.actionsRingAssignmentsByProfile ?? [:])
+                    .filter { $0.value.count == 8 }
+                    .mapValues(migratedActionsRingActionIDs)
+                if !savedRingAssignments.isEmpty {
+                    actionsRingAssignmentsByProfile = savedRingAssignments
+                } else if savedRingActions.count == 8 {
+                    actionsRingAssignmentsByProfile = ["global": savedRingActions]
+                }
+                if actionsRingAssignmentsByProfile["global"] == nil {
+                    actionsRingAssignmentsByProfile["global"] = AppStore.defaultActionsRingActionIDs
+                }
+                actionsRingSize = saved.actionsRingSize ?? .medium
+                removedProfileIDs = Set(saved.removedProfileIDs ?? [])
+                profiles.removeAll { profile in
+                    profile.id != "global" && removedProfileIDs.contains(profile.id)
+                }
+                selectedProfileID = profiles.contains(where: { $0.id == saved.lastProfileID })
+                    ? saved.lastProfileID
+                    : "global"
+                let savedActionsRingProfileID = saved.lastActionsRingProfileID ?? "global"
+                selectedActionsRingProfileID = profiles.contains(where: { $0.id == savedActionsRingProfileID })
+                    ? savedActionsRingProfileID
+                    : "global"
+                actionsRingActionIDs = actionsRingAssignmentsByProfile[selectedActionsRingProfileID]
+                    ?? actionsRingAssignmentsByProfile["global"]
+                    ?? AppStore.defaultActionsRingActionIDs
+                shouldPersistNormalizedSmartActions = restoreSmartActions(saved.customSmartActions ?? [])
             }
-            if actionsRingAssignmentsByProfile["global"] == nil {
-                actionsRingAssignmentsByProfile["global"] = AppStore.defaultActionsRingActionIDs
-            }
-            actionsRingSize = saved.actionsRingSize ?? .medium
-            removedProfileIDs = Set(saved.removedProfileIDs ?? [])
-            profiles.removeAll { profile in
-                profile.id != "global" && removedProfileIDs.contains(profile.id)
-            }
-            selectedProfileID = profiles.contains(where: { $0.id == saved.lastProfileID })
-                ? saved.lastProfileID
-                : "global"
-            let savedActionsRingProfileID = saved.lastActionsRingProfileID ?? "global"
-            selectedActionsRingProfileID = profiles.contains(where: { $0.id == savedActionsRingProfileID })
-                ? savedActionsRingProfileID
-                : "global"
-            actionsRingActionIDs = actionsRingAssignmentsByProfile[selectedActionsRingProfileID]
-                ?? actionsRingAssignmentsByProfile["global"]
-                ?? AppStore.defaultActionsRingActionIDs
-            shouldPersistNormalizedSmartActions = restoreSmartActions(saved.customSmartActions ?? [])
+        } catch {
+            let recoveryURL = try? configurationStore.makeRecoveryCopy()
+            configurationPersistenceBlocked = recoveryURL == nil
+            let recoveryDetail = recoveryURL.map {
+                "原文件已保留为 \($0.lastPathComponent)"
+            } ?? "为避免覆盖原文件，本次运行不会保存配置"
+            configurationLoadWarning = "无法读取现有配置；\(recoveryDetail)"
+            backendLog = "读取本地配置失败：\(error.localizedDescription)"
         }
         if let initialDeviceSnapshot {
             devicePresent = true
@@ -377,7 +394,7 @@ final class AppStore: ObservableObject {
 
     var actionsRingActions: [RemoteAction?] {
         actionsRingActionIDs.map { actionID in
-            actionID.isEmpty ? nil : resolvedAction(id: actionID)
+            actionID.isEmpty ? nil : eligibleAction(id: actionID, for: .actionsRing)
         }
     }
 
@@ -403,7 +420,11 @@ final class AppStore: ObservableObject {
         }
         let actionID = table[selectedProfileID]?[slotID]
             ?? table["global"]?[slotID]
-        return actionID.flatMap(resolvedAction(id:))
+        guard let slot = RemoteButtonSlot.demoSlots.first(where: { $0.id == slotID }),
+              let actionID,
+              let action = resolvedAction(id: actionID),
+              slot.accepts(action, trigger: trigger) else { return nil }
+        return action
     }
 
     func openDevice(_ device: RemoteDevice) {
@@ -739,6 +760,10 @@ final class AppStore: ObservableObject {
             showToast("请先选择动作环上的一个位置")
             return
         }
+        guard eligibleAction(id: action.id, for: .actionsRing) != nil else {
+            showToast("“\(action.title)”不能添加到 Actions Ring")
+            return
+        }
         actionsRingActionIDs[index] = action.id
         actionsRingAssignmentsByProfile[selectedActionsRingProfileID] = actionsRingActionIDs
         persistConfiguration()
@@ -748,7 +773,7 @@ final class AppStore: ObservableObject {
     @discardableResult
     func assignActionToActionsRing(actionID: String, at index: Int) -> Bool {
         guard actionsRingActionIDs.indices.contains(index),
-              let action = resolvedAction(id: actionID) else { return false }
+              let action = eligibleAction(id: actionID, for: .actionsRing) else { return false }
         selectedActionsRingIndex = index
         assignActionToActionsRing(action)
         return true
@@ -765,13 +790,16 @@ final class AppStore: ObservableObject {
     func actionsRingAction(at index: Int, for bundleIdentifier: String?) -> RemoteAction? {
         let actionIDs = actionsRingActionIDs(for: bundleIdentifier)
         guard actionIDs.indices.contains(index) else { return nil }
-        return resolvedAction(id: actionIDs[index])
+        return eligibleAction(id: actionIDs[index], for: .actionsRing)
     }
 
     /// Runs the action currently visible in the editor's selected profile.
     func runActionsRingAction(at index: Int) {
         guard actionsRingActionIDs.indices.contains(index),
-              let action = resolvedAction(id: actionsRingActionIDs[index]) else { return }
+              let action = eligibleAction(
+                id: actionsRingActionIDs[index],
+                for: .actionsRing
+              ) else { return }
         runAction(actionID: action.id, title: action.title)
     }
 
@@ -789,7 +817,7 @@ final class AppStore: ObservableObject {
         let bundleIdentifier = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let actionIDs = actionsRingActionIDs(for: bundleIdentifier)
         let actions = actionIDs.map { actionID in
-            actionID.isEmpty ? nil : resolvedAction(id: actionID)
+            actionID.isEmpty ? nil : eligibleAction(id: actionID, for: .actionsRing)
         }
         guard actions.contains(where: { $0 != nil }) else {
             showToast("请先为 Actions Ring 添加操作")
@@ -799,7 +827,13 @@ final class AppStore: ObservableObject {
             actions: actions,
             size: actionsRingSize,
             onSelect: { [weak self] action in
-                self?.runAction(actionID: action.id, title: action.title)
+                guard let self else { return }
+                guard self.eligibleAction(id: action.id, for: .actionsRing) != nil else {
+                    self.dismissRuntimeActionsRing()
+                    self.showToast("此操作已停用或不再用于 Actions Ring")
+                    return
+                }
+                self.runAction(actionID: action.id, title: action.title)
             },
             onAdjust: { [weak self] action, delta in
                 self?.adjustActionsRingParameter(action, by: delta)
@@ -818,10 +852,21 @@ final class AppStore: ObservableObject {
         case (.brightness, false): actionID = "brightness-down"
         }
 
-        for _ in 0..<min(abs(delta), 8) {
-            backendCoordinator.execute(actionID: actionID, source: "Actions Ring 参数调节")
+        let count = min(abs(delta), 8)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let commands = Array(repeating: self.command(for: actionID) ?? .none, count: count)
+            let result = await self.backendCoordinator.execute(
+                command: .sequence(commands),
+                source: "Actions Ring 参数调节"
+            )
+            switch result {
+            case .success:
+                self.backendLog = "Actions Ring 已调节\(parameter.title)"
+            case let .failure(message):
+                self.showImportantToast("调节失败：\(message)")
+            }
         }
-        backendLog = "Actions Ring 已调节\(parameter.title)"
     }
 
     func actionsRingActionIDs(for bundleIdentifier: String?) -> [String] {
@@ -854,7 +899,7 @@ final class AppStore: ObservableObject {
         to slot: RemoteButtonSlot,
         announce: Bool = true
     ) {
-        guard slot.accepts(action) else {
+        guard slot.accepts(action, trigger: selectedTrigger) else {
             draggedActionID = nil
             showToast("“\(action.title)”不能分配到\(slot.name)键")
             return
@@ -1048,6 +1093,7 @@ final class AppStore: ObservableObject {
 
     func startBackend() {
         guard runtimeServicesEnabled else { return }
+        defer { presentConfigurationLoadWarningIfNeeded() }
         scheduleAutomaticUpdateCheckIfNeeded()
         refreshPermissions()
         guard remoteIsManaged else {
@@ -1339,6 +1385,9 @@ final class AppStore: ObservableObject {
         }
 
         let saved = backup.configuration
+        guard saved.version == PersistedConfiguration.currentVersion else {
+            throw DeviceConfigurationBackupError.unsupportedConfigurationVersion(saved.version)
+        }
         assignmentsByProfile = saved.assignmentsByProfile
         migrateLegacyAssignments()
         holdAssignmentsByProfile = saved.holdAssignmentsByProfile
@@ -1347,6 +1396,7 @@ final class AppStore: ObservableObject {
         holdMilliseconds = saved.settings.holdMilliseconds
         doubleTapMilliseconds = saved.settings.doubleTapMilliseconds
         debounceMilliseconds = saved.settings.debounceMilliseconds ?? 30
+        backendCoordinator.configure(settings: backendSettings)
 
         profiles = AppProfile.profiles
         restoreCustomProfiles()
@@ -1386,6 +1436,8 @@ final class AppStore: ObservableObject {
         selectedSlotID = nil
         selectedTrigger = .tap
         refreshShortcutBindings()
+        configurationPersistenceBlocked = false
+        configurationLoadWarning = nil
         persistConfiguration()
         if inputServiceEnabled {
             restartBackend()
@@ -1472,6 +1524,10 @@ final class AppStore: ObservableObject {
         if let existing = smartActions.first(where: { $0.id == action.id }) {
             return existing
         }
+        guard action.isEligibleWorkflow else {
+            showToast("无法创建“\(action.title)”：工作流包含不适用的动作")
+            return action
+        }
         let (normalized, conflictTitle) = normalizedSmartAction(
             action,
             against: smartActions
@@ -1491,6 +1547,10 @@ final class AppStore: ObservableObject {
     func updateSmartAction(_ action: SmartAction) -> SmartAction {
         guard let index = smartActions.firstIndex(where: { $0.id == action.id }) else {
             return action
+        }
+        guard action.isEligibleWorkflow else {
+            showToast("无法更新“\(action.title)”：工作流包含不适用的动作")
+            return smartActions[index]
         }
         let (normalized, conflictTitle) = normalizedSmartAction(
             action,
@@ -1553,10 +1613,11 @@ final class AppStore: ObservableObject {
         let previousPermissions = permissions
         refreshPermissions()
         refreshDeviceInformation()
-        if showsConnectionTypePicker, devicePresent, !remoteIsManaged {
-            finishAddingDevice()
-        }
         guard remoteIsManaged else { return }
+        if !previousPermissions.accessibilityGranted,
+           permissions.accessibilityGranted {
+            backendCoordinator.startAutomationTriggers()
+        }
         if previousPermissions.inputMonitoringGranted,
            !permissions.inputMonitoringGranted {
             backendCoordinator.stopInput()
@@ -1735,19 +1796,48 @@ final class AppStore: ObservableObject {
         )
     }
 
-    func runAction(actionID: String, title: String) {
-        backendCoordinator.execute(actionID: actionID, source: "手动运行")
-        showToast("已运行“\(title)”")
+    func runAction(
+        actionID: String,
+        title: String,
+        completion: (@MainActor (ActionExecutionResult) -> Void)? = nil
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.backendCoordinator.execute(
+                actionID: actionID,
+                source: "手动运行"
+            )
+            switch result {
+            case .success:
+                self.showToast("已运行“\(title)”")
+            case let .failure(message):
+                self.showImportantToast("无法运行“\(title)”：\(message)")
+            }
+            completion?(result)
+        }
     }
 
     func previewSmartAction(title: String, steps: [SmartActionStep]) {
         let commands = steps.map(\.command)
-        guard !commands.isEmpty, !commands.contains(.none) else {
+        guard !commands.isEmpty,
+              steps.allSatisfy(\.isValidForSmartAction),
+              !commands.contains(.none) else {
             showToast("请先完成所有步骤的配置")
             return
         }
-        backendCoordinator.execute(command: .sequence(commands), source: "试运行")
-        showToast("正在试运行“\(title)”")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.backendCoordinator.execute(
+                command: .sequence(commands),
+                source: "试运行"
+            )
+            switch result {
+            case .success:
+                self.showToast("已完成试运行“\(title)”")
+            case let .failure(message):
+                self.showImportantToast("试运行“\(title)”失败：\(message)")
+            }
+        }
     }
 
     func testSelectedAction() {
@@ -1784,12 +1874,19 @@ final class AppStore: ObservableObject {
             table = doubleTapAssignmentsByProfile
         }
 
-        if let profileID, let actionID = table[profileID]?[slotID] {
-            return isActionExecutionEnabled(actionID) ? actionID : nil
+        let eligibleActionID: (String) -> String? = { actionID in
+            guard self.isActionExecutionEnabled(actionID),
+                  let slot = RemoteButtonSlot.demoSlots.first(where: { $0.id == slotID }),
+                  let action = self.resolvedAction(id: actionID),
+                  slot.accepts(action, trigger: trigger) else { return nil }
+            return actionID
         }
-        guard let actionID = table["global"]?[slotID],
-              isActionExecutionEnabled(actionID) else { return nil }
-        return actionID
+
+        if let profileID, let actionID = table[profileID]?[slotID] {
+            return eligibleActionID(actionID)
+        }
+        guard let actionID = table["global"]?[slotID] else { return nil }
+        return eligibleActionID(actionID)
     }
 
     private func refreshShortcutBindings() {
@@ -1856,7 +1953,9 @@ final class AppStore: ObservableObject {
         if let action = smartActions.first(where: { $0.actionID == actionID }),
            let steps = action.steps {
             let commands = steps.map(\.command)
-            guard !commands.isEmpty, !commands.contains(.none) else { return nil }
+            guard !commands.isEmpty,
+                  steps.allSatisfy(\.isValidForSmartAction),
+                  !commands.contains(.none) else { return nil }
             return .sequence(commands)
         }
 
@@ -1867,6 +1966,20 @@ final class AppStore: ObservableObject {
     private func resolvedAction(id actionID: String) -> RemoteAction? {
         smartActions.first(where: { $0.actionID == actionID })?.remoteAction
             ?? RemoteAction.catalog.first(where: { $0.id == actionID })
+    }
+
+    private func eligibleAction(
+        id actionID: String,
+        for placement: RemoteActionPlacement
+    ) -> RemoteAction? {
+        guard let action = resolvedAction(id: actionID),
+              action.isEligible(for: placement) else { return nil }
+        if placement == .actionsRing,
+           let smartAction = smartActions.first(where: { $0.actionID == actionID }) {
+            guard smartAction.isEnabled,
+                  smartAction.triggers?.contains(.actionsRing) == true else { return nil }
+        }
+        return action
     }
 
     private func removeAssignments(
@@ -1894,11 +2007,27 @@ final class AppStore: ObservableObject {
     }
 
     private func persistConfiguration() {
+        guard !configurationPersistenceBlocked else {
+            backendLog = "配置保存已暂停：请先恢复或移走无法读取的 config.json"
+            return
+        }
         do {
             try configurationStore.save(currentConfiguration())
+            hasPresentedConfigurationSaveWarning = false
         } catch {
             backendLog = "保存本地配置失败：\(error.localizedDescription)"
+            if !hasPresentedConfigurationSaveWarning {
+                hasPresentedConfigurationSaveWarning = true
+                showImportantToast("无法保存设置，请检查 MiCoding 的本地数据目录")
+            }
         }
+    }
+
+    private func presentConfigurationLoadWarningIfNeeded() {
+        guard !hasPresentedConfigurationLoadWarning,
+              let configurationLoadWarning else { return }
+        hasPresentedConfigurationLoadWarning = true
+        showImportantToast(configurationLoadWarning)
     }
 
     private func currentConfiguration() -> PersistedConfiguration {
@@ -2039,6 +2168,12 @@ final class AppStore: ObservableObject {
 
     func showToast(_ message: String) {
         guard showActionNotifications else { return }
+        displayToast(message)
+    }
+
+    /// Errors and user-requested recovery guidance must remain visible even
+    /// when routine action overlays are disabled in Settings.
+    func showImportantToast(_ message: String) {
         displayToast(message)
     }
 

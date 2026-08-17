@@ -1126,7 +1126,9 @@ private struct ActionsRingActionLibrary: View {
     }
 
     private func filteredActions(in group: RingActionGroup) -> [RemoteAction] {
-        let actions = group.actions(from: RemoteAction.catalog, installed: store.actionsRingSmartActionCatalog)
+        let actions = group
+            .actions(from: RemoteAction.catalog, installed: store.actionsRingSmartActionCatalog)
+            .filter { $0.isEligible(for: .actionsRing) }
         guard !searchText.isEmpty else { return actions }
         return actions.filter {
             $0.title.localizedCaseInsensitiveContains(searchText)

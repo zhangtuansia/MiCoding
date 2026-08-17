@@ -39,9 +39,12 @@ enum AppTypography {
     private static let actionsRingActionLatin = Font.custom("AvenirNext-DemiBold", size: 14)
     private static let actionsRingActionFallback = Font.system(size: 14, weight: .bold)
     static let calloutDetail = Font.custom("AvenirNext-Regular", size: 12)
-    static let label = Font.custom("AvenirNext-DemiBold", size: 12)
-    static let supporting = Font.custom("AvenirNext-Regular", size: 12)
-    static let supportingMedium = Font.custom("AvenirNext-Medium", size: 12)
+    // Supporting copy is still secondary, but 12 pt Chinese text becomes
+    // visibly undersized on a desktop app viewed at arm's length. Reserve 12
+    // pt for dense hardware callouts and use 13 pt for regular UI metadata.
+    static let label = Font.custom("AvenirNext-DemiBold", size: 13)
+    static let supporting = Font.custom("AvenirNext-Regular", size: 13)
+    static let supportingMedium = Font.custom("AvenirNext-Medium", size: 13)
     static let numeric = Font.custom("AvenirNext-DemiBold", size: 12).monospacedDigit()
 
     /// Brown Pro's named bold face is declared at CSS weight 400 in Options+.

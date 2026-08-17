@@ -2,18 +2,20 @@
 
 ## 字体
 
-应用统一使用 macOS 系统 SF 字体族，中文由系统自动匹配 PingFang SC。常驻信息不低于 12 pt。
+拉丁字符优先使用 Avenir Next，以接近 Options+ 的 Brown Pro 字面与比例；中文统一回退到 macOS 的 PingFang SC。常规界面信息不低于 13 pt，12 pt 仅用于遥控器硬件标注等高密度信息，11 pt 只允许出现在电量数字或原始 HID Usage 一类技术元数据中。
 
 | 层级 | 字号 / 字重 | 使用场景 |
 | --- | --- | --- |
-| Display | 32 / Bold | 首页问候语 |
-| Page Title | 27 / Semibold | 设置、设备页标题 |
+| Display | 33 / Bold | 首页问候语 |
+| Page Title | 27 / Bold | 设置页标题 |
+| Content Title | 24 / Bold | 设备页、自动化页标题 |
 | Section Title | 20 / Semibold | 面板标题、主要内容分区 |
-| Title | 15 / Semibold | 设备名、列表主文字 |
-| Body | 13 / Regular | 正文、输入框、操作文字 |
-| Body Medium | 13 / Medium | 主操作和重要标签 |
-| Label | 12 / Semibold | 导航、标签、状态 |
-| Supporting | 12 / Regular | 辅助说明和次级信息 |
+| Title | 16 / Semibold | 设备名、列表主文字 |
+| Body | 14 / Regular | 正文、输入框、操作文字 |
+| Body Medium | 14 / Medium | 主操作和重要标签 |
+| Label | 13 / Semibold | 导航、标签、状态 |
+| Supporting | 13 / Regular | 辅助说明和次级信息 |
+| Hardware Detail | 12 / Regular | 遥控器按键名、紧凑标注 |
 
 ## 图标
 
@@ -39,7 +41,7 @@
 - 列表行高 64 pt，较宽松的功能行高 76 pt。
 - 设备和设置页头高 84 pt，首页/智能操作展示页头高 98 pt。
 - 设备侧边导航项高 72 pt，设置侧边导航项高 56 pt。
-- 所有自定义点击目标不小于 36 × 36 pt。
+- 所有自定义点击目标不小于 40 × 40 pt；极紧凑的关闭按钮可保持 32 × 32 pt，但必须有清晰的辅助功能标签。
 - 窗口最小尺寸为 1080 × 700 pt，主验收尺寸为 1280 × 820 pt。
 
 ## 导航与操作

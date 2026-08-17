@@ -6,10 +6,21 @@ enum HomeDeviceCardMetrics {
     static let connectedProductOpacity: CGFloat = 1
     static let unavailableProductOpacity: CGFloat = 0.4
     static let productFrameHeight: CGFloat = 228
-    // Its hover treatment is a pure 12 pt lift: no scale or alpha change.
-    static let idleProductOffsetY: CGFloat = 19
-    static let hoveredProductOffsetY: CGFloat = 7
+    // The hardware render stays optically anchored on hover. Movement here
+    // makes a physical device feel weightless and was explicitly rejected in
+    // the interaction review.
+    static let productOffsetY: CGFloat = 19
     static let idleShadowOpacity: CGFloat = 0.05
+}
+
+enum HomeUnavailableDevicePresentation {
+    static func actionTitle(
+        connectionState: DeviceConnectionState,
+        inputServiceEnabled: Bool
+    ) -> String {
+        guard inputServiceEnabled else { return "启用" }
+        return connectionState == .connecting ? "正在连接" : "蓝牙设置"
+    }
 }
 
 enum HomeGreeting {
@@ -25,25 +36,28 @@ struct HomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            RootToolbar(title: greeting, showAddDevice: true)
+            // MiCoding manages one supported device. The empty state already
+            // owns the single add-device CTA, so the toolbar stays focused on
+            // Smart Actions and Settings instead of repeating that action.
+            RootToolbar(title: greeting)
 
             GeometryReader { proxy in
                 if store.remoteIsManaged {
                     HomeDeviceCard()
                         .position(
-                            x: proxy.size.width / 2 - (store.showExperienceRecommendations ? 196.5 : 0),
+                            x: proxy.size.width / 2,
                             y: proxy.size.height / 2 - 35
                         )
 
                     if store.showExperienceRecommendations {
-                        HomeExperienceCard {
+                        HomeExperienceHint {
                             store.setExperienceRecommendations(false)
                         }
                         .position(
-                            x: proxy.size.width / 2 + 197,
-                            y: proxy.size.height / 2 - 35
+                            x: proxy.size.width / 2,
+                            y: proxy.size.height / 2 + 190
                         )
-                        .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                        .transition(.opacity)
                     }
 
                     if store.showPermissionReminders
@@ -110,100 +124,65 @@ private struct HomeEmptyDeviceState: View {
     }
 }
 
-private struct HomeExperienceCard: View {
+private struct HomeExperienceHint: View {
     let dismiss: () -> Void
 
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(spacing: 10) {
-            Text("升级设备体验")
-                .font(AppTypography.supportingMedium)
-                .scaleEffect(y: 15 / 16, anchor: .top)
-                .foregroundStyle(
-                    Color.primary.opacity(colorScheme == .dark ? 0.32 : 0.76)
-                )
-                .offset(y: 4)
+        HStack(spacing: 13) {
+            AppIcon(symbol: "circle-dot", size: 18)
+                .foregroundStyle(AppTheme.accent(for: colorScheme))
+                .frame(width: 32, height: 32)
+                .background(AppTheme.accent(for: colorScheme).opacity(0.09))
+                .clipShape(Circle())
 
-            ZStack(alignment: .topLeading) {
-                colorScheme == .dark
-                    ? Color.black
-                    : Color.black.opacity(0.025)
-
-                Text("通过 XIAOMI REMOTE 2 PRO 发掘更多玩法")
-                    .font(.custom("AvenirNext-Bold", size: 12))
-                    .foregroundStyle(
-                        Color.primary.opacity(colorScheme == .dark ? 0.70 : 0.50)
-                    )
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.86)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 10)
-
-                RemoteProductImage()
-                    .frame(width: 52, height: 139)
-                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.22 : 0.09), radius: 12, y: 6)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 5)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("进阶控制")
+                    .font(AppTypography.bodyMedium)
+                    .foregroundStyle(AppTheme.text(for: colorScheme))
+                Text("了解长按、双击与 Actions Ring")
+                    .font(AppTypography.supporting)
+                    .foregroundStyle(Color.secondary)
             }
-            .frame(width: 300, height: 228)
-            .clipped()
 
-            HStack(spacing: 8) {
-                Button {
-                    store.showExploreCenter()
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("探索")
-                            .font(.custom("AvenirNext-Regular", size: 11))
+            Spacer(minLength: 12)
 
-                        AppIcon(symbol: "chevron.right", size: AppIconSize.indicator)
-                            .foregroundStyle(AppTheme.accent(for: colorScheme))
-                    }
-                    .offset(x: 2)
-                    .foregroundStyle(Color.primary.opacity(0.82))
-                    .frame(width: 94, height: 40)
-                    .background(colorScheme == .dark ? Color.black : AppTheme.surface(for: colorScheme))
-                    .clipShape(Capsule())
-                    .overlay {
-                        Capsule()
-                            .stroke(
-                                colorScheme == .dark
-                                    ? Color.white.opacity(0.18)
-                                    : AppTheme.separator(for: colorScheme),
-                                lineWidth: 1
-                            )
-                    }
-                }
-                .buttonStyle(QuietButtonStyle())
-                .help("打开探索中心")
-
-                Button(action: dismiss) {
-                    AppIcon(symbol: "xmark", size: 10)
-                        .foregroundStyle(Color.secondary.opacity(0.56))
-                        .frame(width: 20, height: 20)
-                        .background(AppTheme.surface(for: colorScheme))
-                        .clipShape(Circle())
-                        .overlay {
-                            Circle()
-                                .stroke(AppTheme.separator(for: colorScheme), lineWidth: 1)
-                        }
-                }
-                .buttonStyle(QuietButtonStyle())
-                .help("关闭推荐")
-                .accessibilityLabel("关闭推荐")
+            Button("查看用法") {
+                store.showExploreCenter()
             }
-            .offset(y: 11)
+            .font(AppTypography.supportingMedium)
+            .buttonStyle(QuietButtonStyle())
+            .foregroundStyle(AppTheme.accent(for: colorScheme))
+            .frame(height: 36)
+            .help("打开探索中心")
+
+            Button(action: dismiss) {
+                AppIcon(symbol: "xmark", size: 11)
+                    .foregroundStyle(Color.secondary.opacity(0.68))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(QuietButtonStyle())
+            .help("关闭推荐")
+            .accessibilityLabel("关闭推荐")
         }
-        .frame(width: 300)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .frame(width: 430, height: 58)
+        .background(AppTheme.primarySurface(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(AppTheme.separator(for: colorScheme), lineWidth: 1)
+        }
     }
 }
 
 private struct HomeDeviceCard: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
-    @State private var hovered = false
     @State private var showsResetConfirmation = false
     @State private var showsRemovalConfirmation = false
 
@@ -223,11 +202,7 @@ private struct HomeDeviceCard: View {
                         radius: 16,
                         y: 10
                     )
-                    .offset(
-                        y: hovered
-                            ? HomeDeviceCardMetrics.hoveredProductOffsetY
-                            : HomeDeviceCardMetrics.idleProductOffsetY
-                    )
+                    .offset(y: HomeDeviceCardMetrics.productOffsetY)
                     // Options+ keeps the entire 393 × 363 device column
                     // clickable, including the otherwise-empty area around
                     // and below the product render. Keep the image anchored
@@ -239,8 +214,6 @@ private struct HomeDeviceCard: View {
             // remove the extra layout height so neither visible element moves.
             .padding(.bottom, -123)
             .buttonStyle(QuietButtonStyle())
-            .onHover { hovered = $0 }
-            .animation(.easeOut(duration: 0.16), value: hovered)
             .help("打开按键配置")
             .accessibilityLabel(RemoteDevice.remote2Pro.name)
             .accessibilityValue(deviceAccessibilityValue)
@@ -307,10 +280,10 @@ private struct HomeDeviceCard: View {
     }
 
     private var unavailableStateTitle: String {
-        if store.connectionState == .connecting {
-            return store.connectionState.title
-        }
-        return "停用"
+        HomeUnavailableDevicePresentation.actionTitle(
+            connectionState: store.connectionState,
+            inputServiceEnabled: store.inputServiceEnabled
+        )
     }
 
     private func recoverUnavailableDevice() {
@@ -393,9 +366,11 @@ private struct HomeDisconnectedControls: View {
         HStack(spacing: 8) {
             Button(action: recover) {
                 Text(title)
-                    .font(.custom("AvenirNext-Regular", size: 11))
+                    .font(AppTypography.supporting)
                     .foregroundStyle(Color.primary.opacity(0.76))
-                    .frame(width: 54, height: 40)
+                    .padding(.horizontal, 14)
+                    .frame(minWidth: 54)
+                    .frame(height: 40)
                     .contentShape(Rectangle())
                     .background(AppTheme.surface(for: colorScheme))
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))

@@ -205,7 +205,16 @@ struct SmartActionsView: View {
 
                         Group {
                         if selection == .actions && actions.isEmpty {
-                            EmptySmartActionsView()
+                            EmptySmartActionsView(
+                                create: {
+                                    editorRequest = SmartActionEditorRequest(action: nil)
+                                },
+                                browseTemplates: {
+                                    searchText = ""
+                                    selectedCategory = "全部"
+                                    selection = .templates
+                                }
+                            )
                         } else if filteredActions.isEmpty {
                             EmptyAutomationSearchView {
                                 searchText = ""
@@ -363,12 +372,23 @@ struct SmartActionsView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.message = "选择从 MiCoding 导出的智能操作 JSON 文件"
-        guard panel.runModal() == .OK, let url = panel.url,
-              let data = try? Data(contentsOf: url),
-              let imported = try? JSONDecoder().decode([PersistedSmartAction].self, from: data) else {
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let imported: [PersistedSmartAction]
+        do {
+            let data = try Data(contentsOf: url)
+            imported = try JSONDecoder().decode([PersistedSmartAction].self, from: data)
+        } catch {
+            store.showImportantToast("导入失败：请选择由 MiCoding 导出的智能操作 JSON 文件")
+            return
+        }
+        guard !imported.isEmpty else {
+            store.showImportantToast("导入失败：文件中没有智能操作")
             return
         }
 
+        var importedCount = 0
+        var skippedCount = 0
         for item in imported {
             let collidesWithTemplate = SmartAction.samples.contains(where: { $0.id == item.id })
             let normalizedID = actions.contains(where: { $0.id == item.id }) || collidesWithTemplate
@@ -392,14 +412,24 @@ struct SmartActionsView: View {
                 triggers: item.triggers,
                 isEnabled: item.isEnabled
             )
-            guard let action = SmartAction.restored(from: normalized) else { continue }
+            guard let action = SmartAction.restored(from: normalized) else {
+                skippedCount += 1
+                continue
+            }
             if usesStoredActions {
                 actions.append(store.addSmartAction(action))
             } else {
                 actions.append(action)
             }
+            importedCount += 1
+        }
+        guard importedCount > 0 else {
+            store.showImportantToast("导入失败：文件中的操作缺少可执行步骤")
+            return
         }
         selection = .actions
+        let skippedSuffix = skippedCount > 0 ? "，跳过 \(skippedCount) 个无效操作" : ""
+        store.showToast("已导入 \(importedCount) 个智能操作\(skippedSuffix)")
     }
 
     private func exportAction(_ action: SmartAction) {
@@ -942,7 +972,7 @@ private struct SmartActionCard: View {
 
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
-    @State private var didRun = false
+    @State private var runFeedback = ActionRunFeedbackState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1063,15 +1093,24 @@ private struct SmartActionCard: View {
                     Button(action: run) {
                         HStack(spacing: 7) {
                             AppIcon(
-                                symbol: didRun ? "checkmark" : "play.fill",
+                                symbol: runFeedback.didSucceed ? "checkmark" : "play.fill",
                                 size: AppIconSize.indicator
                             )
-                            Text(didRun ? "已运行" : "试运行")
+                            Text(
+                                runFeedback.didSucceed
+                                    ? "已运行"
+                                    : (runFeedback.isRunning ? "运行中" : "试运行")
+                            )
                                 .font(AppTypography.supportingMedium)
                         }
-                        .foregroundStyle(didRun ? AppTheme.success : AppTheme.accent(for: colorScheme))
+                        .foregroundStyle(
+                            runFeedback.didSucceed
+                                ? AppTheme.success
+                                : AppTheme.accent(for: colorScheme)
+                        )
                     }
                     .buttonStyle(QuietButtonStyle())
+                    .disabled(!runFeedback.canRun)
                     .help("试运行\(action.title)")
 
                     Spacer()
@@ -1103,8 +1142,12 @@ private struct SmartActionCard: View {
                 .padding(.horizontal, 20)
                 .frame(maxWidth: .infinity, minHeight: 56)
                 .background(
-                    (didRun ? AppTheme.success : AppTheme.accent(for: colorScheme))
-                        .opacity(didRun ? 0.075 : 0)
+                    (
+                        runFeedback.didSucceed
+                            ? AppTheme.success
+                            : AppTheme.accent(for: colorScheme)
+                    )
+                    .opacity(runFeedback.didSucceed ? 0.075 : 0)
                 )
             }
         }
@@ -1309,11 +1352,14 @@ private struct SmartActionCard: View {
     }
 
     private func run() {
-        didRun = true
-        store.runAction(actionID: action.actionID, title: action.title)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) {
-            didRun = false
+        guard runFeedback.begin() else { return }
+        store.runAction(actionID: action.actionID, title: action.title) { result in
+            runFeedback.complete(with: result)
+            guard runFeedback.didSucceed else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) {
+                guard runFeedback.didSucceed else { return }
+                runFeedback.reset()
+            }
         }
     }
 }
@@ -1736,7 +1782,7 @@ struct SmartActionEditorView: View {
     private func workflowStep(_ step: SmartActionStep, at index: Int) -> some View {
         let selected = selectedStepIndex == index
         let interactive = selected || hoveredStepIndex == index
-        let invalid = !step.isValid
+        let invalid = !step.isValidForSmartAction
         return HStack(spacing: 0) {
             if interactive {
                 AppIcon(symbol: "grip-vertical", size: 18)
@@ -2025,6 +2071,7 @@ struct SmartActionEditorView: View {
         RemoteAction.catalog.filter {
             [.recommended, .system, .media].contains($0.category)
                 && $0.id != "show-actions-ring"
+                && $0.isEligible(for: .smartActionStep)
         }
     }
 
@@ -2086,7 +2133,7 @@ struct SmartActionEditorView: View {
 
     private var stepsAreValid: Bool {
         !steps.isEmpty
-            && steps.allSatisfy(\.isValid)
+            && steps.allSatisfy(\.isValidForSmartAction)
     }
 
     private var canSave: Bool {
@@ -2145,10 +2192,12 @@ struct SmartActionEditorView: View {
     }
 
     private func validationMessage(for step: SmartActionStep) -> String? {
-        guard !step.isValid else { return nil }
+        guard !step.isValidForSmartAction else { return nil }
         return switch step {
         case .action:
-            "此动作暂时没有可用的执行器。"
+            step.isValid
+                ? "此动作仅可在它的专用入口使用。"
+                : "此动作暂时没有可用的执行器。"
         case .application, .applicationPath, .applicationControl:
             "请选择一个有效的应用。"
         case .keystroke:
@@ -2815,24 +2864,52 @@ final class ShortcutRecorderNSView: NSView {
 }
 
 private struct EmptySmartActionsView: View {
+    let create: () -> Void
+    let browseTemplates: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         VStack(spacing: 0) {
-            EmptySmartActionsIllustration()
-                .frame(width: 600, height: 300)
-                .padding(.top, 84)
-                // Keep the artwork's ground line independent from the copy.
-                // Once the shared guide/filter stack is aligned, its visible
-                // baseline still needs an 8 pt optical lift to match Options+.
-                .offset(y: AutomationLibraryLayoutMetrics.emptyIllustrationYOffset)
+            AppIcon(symbol: "workflow", size: 26)
+                .foregroundStyle(AppTheme.accent(for: colorScheme))
+                .frame(width: 56, height: 56)
+                .background(AppTheme.accent(for: colorScheme).opacity(0.09))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-            Text("点击“创建”以添加您的首个 Smart Actions，或者从模板中添加。")
-                .font(.custom("AvenirNext-Regular", size: 16))
+            Text("还没有工作流")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(AppTheme.text(for: colorScheme))
+                .padding(.top, 20)
+
+            Text("创建一组连续操作并绑定到遥控器按键，\n也可以先从模板开始，再按需要调整。")
+                .font(AppTypography.body)
+                .foregroundStyle(Color.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.top, AutomationLibraryLayoutMetrics.emptyCopyTopInset)
+                .lineSpacing(3)
+                .padding(.top, 9)
+
+            HStack(spacing: 12) {
+                Button("创建工作流", action: create)
+                    .buttonStyle(PrimaryActionButtonStyle(width: 132))
+
+                Button("浏览模板", action: browseTemplates)
+                    .buttonStyle(SecondaryActionButtonStyle(width: 112))
+            }
+            .padding(.top, 24)
+
+            HStack(spacing: 7) {
+                AppIcon(symbol: "checkmark.shield.fill", size: 14)
+                Text("配置和运行记录只保存在这台 Mac")
+            }
+            .font(AppTypography.supporting)
+            .foregroundStyle(Color.secondary.opacity(0.82))
+            .padding(.top, 22)
         }
         .frame(width: 840)
-        .frame(minHeight: 500, alignment: .top)
+        .frame(minHeight: 430, alignment: .center)
         .offset(x: -45)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -3692,7 +3769,12 @@ private struct FeedbackSettingsContent: View {
         panel.allowedContentTypes = [.plainText]
         panel.nameFieldStringValue = "MiCoding-Bluetooth-Diagnostic.txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? Data(report.utf8).write(to: url, options: .atomic)
+        do {
+            try Data(report.utf8).write(to: url, options: .atomic)
+            store.showToast("蓝牙诊断报告已导出")
+        } catch {
+            store.showImportantToast("导出失败：\(error.localizedDescription)")
+        }
     }
 }
 
@@ -3990,7 +4072,7 @@ private struct PrivacySettingsContent: View {
                     .buttonStyle(QuietButtonStyle())
 
                 Text("配置只保存在这台 Mac。MiCoding 仅在用户授权后读取遥控器输入并执行已分配的系统动作。")
-                    .font(.custom("AvenirNext-Regular", size: 11))
+                    .font(AppTypography.supporting)
                     .foregroundStyle(Color.primary.opacity(0.72))
                     .lineSpacing(1)
                     .frame(width: 515, alignment: .leading)

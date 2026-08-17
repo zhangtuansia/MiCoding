@@ -902,7 +902,7 @@ private struct FeatureOverviewPanel: View {
                         Text(profile.title)
                             .font(.custom("AvenirNext-DemiBold", size: 13))
                         Text("已经设置")
-                            .font(.custom("AvenirNext-Regular", size: 11))
+                            .font(AppTypography.supporting)
                             .foregroundStyle(AppTheme.success)
                     }
                     Spacer()

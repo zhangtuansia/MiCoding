@@ -5,61 +5,82 @@ import Foundation
 
 @MainActor
 protocol ActionExecuting: AnyObject {
-    func execute(_ command: ActionCommand)
+    func execute(_ command: ActionCommand) async -> ActionExecutionResult
+}
+
+enum ActionExecutionResult: Equatable, Sendable {
+    case success
+    case failure(String)
+
+    var failureMessage: String? {
+        guard case let .failure(message) = self else { return nil }
+        return message
+    }
 }
 
 @MainActor
 final class SystemActionExecutor: ActionExecuting {
-    func execute(_ command: ActionCommand) {
-        Task { @MainActor [weak self] in
-            await self?.executeNow(command)
-        }
-    }
-
-    private func executeNow(_ command: ActionCommand) async {
+    func execute(_ command: ActionCommand) async -> ActionExecutionResult {
         switch command {
         case .keyStroke(let keyCode, let rawFlags):
-            postKey(CGKeyCode(keyCode), flags: CGEventFlags(rawValue: rawFlags))
+            return postKey(CGKeyCode(keyCode), flags: CGEventFlags(rawValue: rawFlags))
+                ? .success
+                : .failure(eventPostingFailureMessage(for: "键盘事件"))
         case .system(let action):
-            executeSystemAction(action)
+            return executeSystemAction(action)
         case .openApplication(let bundleIdentifier):
-            openApplication(bundleIdentifier: bundleIdentifier)
+            return await openApplication(bundleIdentifier: bundleIdentifier)
         case .openApplicationAtPath(let path):
-            openApplication(atPath: path)
+            return await openApplication(atPath: path)
         case .focusApplicationInput(let bundleIdentifier):
-            await focusApplicationInput(bundleIdentifier: bundleIdentifier)
+            return await focusApplicationInput(bundleIdentifier: bundleIdentifier)
         case let .controlApplication(bundleIdentifier, operation):
-            controlApplication(bundleIdentifier: bundleIdentifier, operation: operation)
+            return await controlApplication(
+                bundleIdentifier: bundleIdentifier,
+                operation: operation
+            )
         case .openURL(let value):
-            openURL(value)
+            return openURL(value)
         case .openDefaultBrowser:
-            openDefaultBrowser()
+            return openDefaultBrowser()
         case .searchSelectedText:
-            await searchSelectedText()
+            return await searchSelectedText()
         case let .openURLWithSelectedTextPrompt(url, instruction):
-            await openURLWithSelectedTextPrompt(url: url, instruction: instruction)
+            return await openURLWithSelectedTextPrompt(url: url, instruction: instruction)
         case .typeText(let value):
-            await pasteText(value)
+            return await pasteText(value)
         case .delay(let milliseconds):
-            try? await Task.sleep(for: .milliseconds(max(0, milliseconds)))
+            do {
+                try await Task.sleep(for: .milliseconds(max(0, milliseconds)))
+                return .success
+            } catch {
+                return .failure("动作已取消")
+            }
         case .startDictation:
-            await startDictation()
+            return await startDictation()
         case .hardwareKeyPassThrough:
-            break
+            return .success
         case .showActionsRing:
             NotificationCenter.default.post(name: .showActionsRingRequested, object: nil)
+            return .success
         case .sequence(let commands):
-            for command in commands {
-                guard !Task.isCancelled else { return }
-                await executeNow(command)
+            guard !commands.isEmpty else {
+                return .failure("动作序列为空")
             }
+            for (index, command) in commands.enumerated() {
+                guard !Task.isCancelled else { return .failure("动作已取消") }
+                if case let .failure(message) = await execute(command) {
+                    return .failure("第 \(index + 1) 步失败：\(message)")
+                }
+            }
+            return .success
         case .none:
-            break
+            return .failure("此动作尚无可用执行器")
         }
     }
 
-    private func pasteText(_ value: String) async {
-        guard !value.isEmpty else { return }
+    private func pasteText(_ value: String) async -> ActionExecutionResult {
+        guard !value.isEmpty else { return .failure("要输入的文本为空") }
         let pasteboard = NSPasteboard.general
         let previousItems: [NSPasteboardItem] = pasteboard.pasteboardItems?.map { source in
             let copy = NSPasteboardItem()
@@ -74,59 +95,86 @@ final class SystemActionExecutor: ActionExecuting {
         pasteboard.clearContents()
         pasteboard.setString(value, forType: .string)
         let injectedChangeCount = pasteboard.changeCount
-        postKey(9, flags: .maskCommand)
-        try? await Task.sleep(for: .milliseconds(80))
-
-        guard pasteboard.changeCount == injectedChangeCount else { return }
-        pasteboard.clearContents()
-        if !previousItems.isEmpty {
-            let writableItems: [any NSPasteboardWriting] = previousItems
-            pasteboard.writeObjects(writableItems)
+        guard postKey(9, flags: .maskCommand) else {
+            restorePasteboard(previousItems)
+            return .failure(eventPostingFailureMessage(for: "粘贴键盘事件"))
         }
+        do {
+            try await Task.sleep(for: .milliseconds(80))
+        } catch {
+            restorePasteboard(previousItems)
+            return .failure("动作已取消")
+        }
+
+        guard pasteboard.changeCount == injectedChangeCount else { return .success }
+        restorePasteboard(previousItems)
+        return .success
     }
 
-    private func executeSystemAction(_ action: SystemActionName) {
+    private func restorePasteboard(_ previousItems: [NSPasteboardItem]) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard !previousItems.isEmpty else { return }
+        let writableItems: [any NSPasteboardWriting] = previousItems
+        pasteboard.writeObjects(writableItems)
+    }
+
+    private func executeSystemAction(_ action: SystemActionName) -> ActionExecutionResult {
         switch action {
         case .spotlight:
-            postKey(49, flags: .maskCommand)
+            return keyboardResult(postKey(49, flags: .maskCommand))
         case .missionControl:
-            launchProcess(path: "/usr/bin/open", arguments: ["-a", "Mission Control"])
+            return launchProcess(path: "/usr/bin/open", arguments: ["-a", "Mission Control"])
         case .showDesktop:
-            postKey(103, flags: [])
+            return keyboardResult(postKey(103, flags: []))
         case .lockScreen:
-            postKey(12, flags: [.maskCommand, .maskControl])
+            return keyboardResult(postKey(12, flags: [.maskCommand, .maskControl]))
         case .screenshotRegion:
-            postKey(21, flags: [.maskCommand, .maskShift])
+            return keyboardResult(postKey(21, flags: [.maskCommand, .maskShift]))
         case .playPause:
-            postAuxiliaryKey(type: 16)
+            return auxiliaryKeyResult(postAuxiliaryKey(type: 16))
         case .previousTrack:
-            postAuxiliaryKey(type: 18)
+            return auxiliaryKeyResult(postAuxiliaryKey(type: 18))
         case .nextTrack:
-            postAuxiliaryKey(type: 17)
+            return auxiliaryKeyResult(postAuxiliaryKey(type: 17))
         case .volumeUp:
-            postAuxiliaryKey(type: 0)
+            return auxiliaryKeyResult(postAuxiliaryKey(type: 0))
         case .volumeDown:
-            postAuxiliaryKey(type: 1)
+            return auxiliaryKeyResult(postAuxiliaryKey(type: 1))
         case .mute:
-            postAuxiliaryKey(type: 7)
+            return auxiliaryKeyResult(postAuxiliaryKey(type: 7))
         case .brightnessUp:
-            postAuxiliaryKey(type: 2)
+            return auxiliaryKeyResult(postAuxiliaryKey(type: 2))
         case .brightnessDown:
-            postAuxiliaryKey(type: 3)
+            return auxiliaryKeyResult(postAuxiliaryKey(type: 3))
         }
     }
 
-    private func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags) {
+    private func keyboardResult(_ posted: Bool) -> ActionExecutionResult {
+        posted ? .success : .failure(eventPostingFailureMessage(for: "键盘事件"))
+    }
+
+    private func auxiliaryKeyResult(_ posted: Bool) -> ActionExecutionResult {
+        posted ? .success : .failure(eventPostingFailureMessage(for: "媒体键事件"))
+    }
+
+    private func eventPostingFailureMessage(for eventName: String) -> String {
+        AXIsProcessTrusted()
+            ? "无法创建\(eventName)"
+            : "未获得辅助功能权限，无法发送\(eventName)"
+    }
+
+    private func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
         if let modifierFlag = modifierFlag(for: keyCode),
            flags.contains(modifierFlag),
            flags.subtracting(modifierFlag).isEmpty {
-            postModifierTap(keyCode: keyCode, flag: modifierFlag)
-            return
+            return postModifierTap(keyCode: keyCode, flag: modifierFlag)
         }
         let source = CGEventSource(stateID: .combinedSessionState)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
-            return
+            return false
         }
         down.flags = flags
         up.flags = flags
@@ -134,6 +182,7 @@ final class SystemActionExecutor: ActionExecuting {
         up.setIntegerValueField(.eventSourceUserData, value: miCodingSyntheticEventMarker)
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
+        return true
     }
 
     private func modifierFlag(for keyCode: CGKeyCode) -> CGEventFlags? {
@@ -151,10 +200,12 @@ final class SystemActionExecutor: ActionExecuting {
     /// keyboards. Posting a regular keyDown/keyUp pair (and leaving the flag
     /// set on keyUp) is why recorded fn shortcuts were visible in MiCoding but
     /// ignored by apps that monitor modifiers directly.
-    private func postModifierTap(keyCode: CGKeyCode, flag: CGEventFlags) {
+    private func postModifierTap(keyCode: CGKeyCode, flag: CGEventFlags) -> Bool {
         let source = CGEventSource(stateID: .hidSystemState)
-        postModifierEvent(keyCode: keyCode, isDown: true, flags: flag, source: source)
-        postModifierEvent(keyCode: keyCode, isDown: false, flags: [], source: source)
+        guard postModifierEvent(keyCode: keyCode, isDown: true, flags: flag, source: source) else {
+            return false
+        }
+        return postModifierEvent(keyCode: keyCode, isDown: false, flags: [], source: source)
     }
 
     private func postModifierEvent(
@@ -162,20 +213,22 @@ final class SystemActionExecutor: ActionExecuting {
         isDown: Bool,
         flags: CGEventFlags,
         source: CGEventSource?
-    ) {
+    ) -> Bool {
         guard let event = CGEvent(
             keyboardEventSource: source,
             virtualKey: keyCode,
             keyDown: isDown
-        ) else { return }
+        ) else { return false }
         event.type = .flagsChanged
         event.flags = flags
         event.setIntegerValueField(.eventSourceUserData, value: miCodingSyntheticEventMarker)
         event.post(tap: .cghidEventTap)
+        return true
     }
 
-    private func postAuxiliaryKey(type: Int32) {
-        func post(isDown: Bool) {
+    private func postAuxiliaryKey(type: Int32) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        func post(isDown: Bool) -> Bool {
             let flags = NSEvent.ModifierFlags(rawValue: isDown ? 0xA00 : 0xB00)
             let data1 = (Int(type) << 16) | ((isDown ? 0xA : 0xB) << 8)
             let event = NSEvent.otherEvent(
@@ -189,31 +242,44 @@ final class SystemActionExecutor: ActionExecuting {
                 data1: data1,
                 data2: -1
             )
-            event?.cgEvent?.post(tap: .cghidEventTap)
+            guard let cgEvent = event?.cgEvent else { return false }
+            cgEvent.post(tap: .cghidEventTap)
+            return true
         }
 
-        post(isDown: true)
-        post(isDown: false)
+        return post(isDown: true) && post(isDown: false)
     }
 
-    private func openApplication(bundleIdentifier: String) {
+    private func openApplication(bundleIdentifier: String) async -> ActionExecutionResult {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
-            return
+            return .failure("未找到应用（\(bundleIdentifier)）")
         }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        return await openApplication(at: url, displayName: bundleIdentifier)
     }
 
-    private func openApplication(atPath path: String) {
+    private func openApplication(atPath path: String) async -> ActionExecutionResult {
         let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         guard url.pathExtension.localizedCaseInsensitiveCompare("app") == .orderedSame,
               FileManager.default.fileExists(atPath: url.path) else {
-            return
+            return .failure("应用路径无效：\(path)")
         }
+        return await openApplication(at: url, displayName: url.lastPathComponent)
+    }
+
+    private func openApplication(at url: URL, displayName: String) async -> ActionExecutionResult {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        return await withCheckedContinuation { continuation in
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
+                if let error {
+                    continuation.resume(
+                        returning: .failure("无法打开应用 \(displayName)：\(error.localizedDescription)")
+                    )
+                } else {
+                    continuation.resume(returning: .success)
+                }
+            }
+        }
     }
 
     /// Focuses the prompt composer without relying on app-specific keyboard
@@ -221,32 +287,45 @@ final class SystemActionExecutor: ActionExecuting {
     /// accessibility text area, even though it is deeply nested in web views.
     /// A point hit-test near the bottom of the active window reaches that
     /// editor immediately and avoids walking a very large accessibility tree.
-    private func focusApplicationInput(bundleIdentifier: String) async {
+    private func focusApplicationInput(bundleIdentifier: String) async -> ActionExecutionResult {
         let supportedBundleIdentifiers = [
             "com.openai.codex",
             "com.anthropic.claudefordesktop"
         ]
-        guard supportedBundleIdentifiers.contains(bundleIdentifier) else { return }
+        guard supportedBundleIdentifiers.contains(bundleIdentifier) else {
+            return .failure("此应用暂不支持自动聚焦输入框")
+        }
+        guard AXIsProcessTrusted() else {
+            return .failure("未获得辅助功能权限，无法聚焦应用输入框")
+        }
+
+        if NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleIdentifier)
+            .isEmpty {
+            if case let .failure(message) = await openApplication(bundleIdentifier: bundleIdentifier) {
+                return .failure(message)
+            }
+        }
 
         // Cold-starting either Electron app can take a few seconds. Retry
         // long enough for its first window and web accessibility tree to load.
-        for attempt in 0..<40 {
+        for _ in 0..<40 {
             guard let running = NSRunningApplication
                 .runningApplications(withBundleIdentifier: bundleIdentifier)
                 .first else {
-                if attempt == 0 {
-                    openApplication(bundleIdentifier: bundleIdentifier)
-                }
                 try? await Task.sleep(for: .milliseconds(100))
                 continue
             }
 
-            running.activate(options: [.activateAllWindows])
+            guard running.activate(options: [.activateAllWindows]) else {
+                return .failure("无法将应用置于前台")
+            }
             if focusPromptTextArea(processIdentifier: running.processIdentifier) {
-                return
+                return .success
             }
             try? await Task.sleep(for: .milliseconds(100))
         }
+        return .failure("无法聚焦应用输入框，请检查辅助功能权限")
     }
 
     private func focusPromptTextArea(processIdentifier: pid_t) -> Bool {
@@ -383,51 +462,70 @@ final class SystemActionExecutor: ActionExecuting {
     private func controlApplication(
         bundleIdentifier: String,
         operation: ApplicationActionOperation
-    ) {
+    ) async -> ActionExecutionResult {
         switch operation {
         case .open:
-            openApplication(bundleIdentifier: bundleIdentifier)
+            return await openApplication(bundleIdentifier: bundleIdentifier)
         case .close:
-            NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
-                .forEach { $0.terminate() }
+            let runningApplications = NSRunningApplication.runningApplications(
+                withBundleIdentifier: bundleIdentifier
+            )
+            guard !runningApplications.isEmpty else {
+                if NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) == nil {
+                    return .failure("未找到应用（\(bundleIdentifier)）")
+                }
+                return .failure("应用当前未运行")
+            }
+            guard runningApplications.allSatisfy({ $0.terminate() }) else {
+                return .failure("无法退出应用")
+            }
+            return .success
         case .bringToFront:
             if let running = NSRunningApplication
                 .runningApplications(withBundleIdentifier: bundleIdentifier)
                 .first {
-                running.activate(options: [.activateAllWindows])
+                return running.activate(options: [.activateAllWindows])
+                    ? .success
+                    : .failure("无法将应用置于前台")
             } else {
-                openApplication(bundleIdentifier: bundleIdentifier)
+                return await openApplication(bundleIdentifier: bundleIdentifier)
             }
         }
     }
 
-    private func openDefaultBrowser() {
+    private func openDefaultBrowser() -> ActionExecutionResult {
         openURL("https://www.google.com")
     }
 
-    private func searchSelectedText() async {
+    private func searchSelectedText() async -> ActionExecutionResult {
+        guard AXIsProcessTrusted() else {
+            return .failure("未获得辅助功能权限，无法读取所选文本")
+        }
         guard let selection = await copySelectedText() else {
-            openDefaultBrowser()
-            return
+            return openDefaultBrowser()
         }
 
         var components = URLComponents(string: "https://www.google.com/search")
         components?.queryItems = [URLQueryItem(name: "q", value: selection)]
         guard let value = components?.url?.absoluteString else {
-            openDefaultBrowser()
-            return
+            return openDefaultBrowser()
         }
-        openURL(value)
+        return openURL(value)
     }
 
-    private func openURLWithSelectedTextPrompt(url: String, instruction: String) async {
+    private func openURLWithSelectedTextPrompt(
+        url: String,
+        instruction: String
+    ) async -> ActionExecutionResult {
+        guard AXIsProcessTrusted() else {
+            return .failure("未获得辅助功能权限，无法读取所选文本")
+        }
         guard let selection = await copySelectedText(),
               let prompt = SelectedTextPromptBuilder.prompt(
                 instruction: instruction,
                 selection: selection
               ) else {
-            openURL(url)
-            return
+            return openURL(url)
         }
 
         // Keep the composed prompt on the pasteboard as a reliable fallback.
@@ -441,7 +539,11 @@ final class SystemActionExecutor: ActionExecuting {
             NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil
         }
         if let codexBundleIdentifier {
-            openApplication(bundleIdentifier: codexBundleIdentifier)
+            if case let .failure(message) = await openApplication(
+                bundleIdentifier: codexBundleIdentifier
+            ) {
+                return .failure(message)
+            }
             for _ in 0..<12 {
                 try? await Task.sleep(for: .milliseconds(100))
                 if NSRunningApplication
@@ -450,36 +552,46 @@ final class SystemActionExecutor: ActionExecuting {
                     break
                 }
             }
-            postKey(9, flags: .maskCommand)
-            return
+            return postKey(9, flags: .maskCommand)
+                ? .success
+                : .failure(eventPostingFailureMessage(for: "粘贴键盘事件"))
         }
 
         guard let destination = SelectedTextPromptBuilder.destinationURL(
             baseURL: url,
             prompt: prompt
         ) else {
-            openURL(url)
-            return
+            return openURL(url)
         }
-        NSWorkspace.shared.open(destination)
+        return NSWorkspace.shared.open(destination)
+            ? .success
+            : .failure("无法打开目标网址")
     }
 
     /// Starts the system dictation command in the active application without
     /// synthesizing the user's Globe/fn shortcut. This keeps remote voice input
     /// independent from whatever action macOS has assigned to Globe/fn.
-    private func startDictation() async {
+    private func startDictation() async -> ActionExecutionResult {
         if let application = NSWorkspace.shared.frontmostApplication,
            application.processIdentifier != ProcessInfo.processInfo.processIdentifier,
            pressMenuItem(withCommandGlyph: 150, in: application.processIdentifier) {
-            return
+            return .success
         }
 
         // Accessibility can be unavailable briefly while an application is
         // launching. Fall back to the standard double-fn gesture so dictation
         // still works on machines that have not granted Accessibility yet.
-        postKey(63, flags: .maskSecondaryFn)
-        try? await Task.sleep(for: .milliseconds(90))
-        postKey(63, flags: .maskSecondaryFn)
+        guard postKey(63, flags: .maskSecondaryFn) else {
+            return .failure(eventPostingFailureMessage(for: "听写快捷键事件"))
+        }
+        do {
+            try await Task.sleep(for: .milliseconds(90))
+        } catch {
+            return .failure("动作已取消")
+        }
+        return postKey(63, flags: .maskSecondaryFn)
+            ? .success
+            : .failure(eventPostingFailureMessage(for: "听写快捷键事件"))
     }
 
     private func pressMenuItem(withCommandGlyph glyph: Int, in processIdentifier: pid_t) -> Bool {
@@ -543,7 +655,7 @@ final class SystemActionExecutor: ActionExecuting {
     private func copySelectedText() async -> String? {
         let pasteboard = NSPasteboard.general
         let initialChangeCount = pasteboard.changeCount
-        postKey(8, flags: .maskCommand)
+        guard postKey(8, flags: .maskCommand) else { return nil }
 
         for _ in 0..<8 {
             try? await Task.sleep(for: .milliseconds(50))
@@ -559,17 +671,24 @@ final class SystemActionExecutor: ActionExecuting {
         return selection
     }
 
-    private func openURL(_ value: String) {
+    private func openURL(_ value: String) -> ActionExecutionResult {
         guard let url = URL(string: value), ["http", "https"].contains(url.scheme?.lowercased()) else {
-            return
+            return .failure("网址无效：\(value)")
         }
-        NSWorkspace.shared.open(url)
+        return NSWorkspace.shared.open(url)
+            ? .success
+            : .failure("无法打开网址：\(value)")
     }
 
-    private func launchProcess(path: String, arguments: [String]) {
+    private func launchProcess(path: String, arguments: [String]) -> ActionExecutionResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
-        try? process.run()
+        do {
+            try process.run()
+            return .success
+        } catch {
+            return .failure("无法启动系统进程：\(error.localizedDescription)")
+        }
     }
 }

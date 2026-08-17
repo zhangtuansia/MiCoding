@@ -149,7 +149,6 @@ struct AppShellView: View {
 struct RootToolbar: View {
     let title: String
     var eyebrow: String?
-    var showAddDevice = false
 
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
@@ -165,25 +164,23 @@ struct RootToolbar: View {
                 }
                 Text(title)
                     .font(AppTypography.display)
-                    .tracking(showAddDevice ? 0 : -0.7)
+                    .tracking(0)
                     .foregroundStyle(AppTheme.text(for: colorScheme))
                     .offset(
-                        y: eyebrow == nil && showAddDevice
+                        y: eyebrow == nil
                             ? HomeToolbarLayoutMetrics.greetingYOffset
                             : 0
                     )
                     .scaleEffect(
-                        x: showAddDevice ? HomeToolbarLayoutMetrics.greetingWidthScale : 1,
-                        y: showAddDevice ? HomeToolbarLayoutMetrics.greetingHeightScale : 1,
+                        x: HomeToolbarLayoutMetrics.greetingWidthScale,
+                        y: HomeToolbarLayoutMetrics.greetingHeightScale,
                         anchor: .topLeading
                     )
             }
 
             Spacer()
 
-            if showAddDevice {
-                HomeToolbar()
-            }
+            HomeToolbar()
         }
         .padding(.horizontal, 40)
         .padding(.top, 18)
@@ -201,10 +198,6 @@ enum HomeToolbarLayoutMetrics {
     static let greetingWidthScale: CGFloat = 1
     static let greetingHeightScale: CGFloat = 1
     static let greetingYOffset: CGFloat = 0.5
-    static let addIconSize: CGFloat = 22
-    static let addIconXOffset: CGFloat = -2
-    static let addTextXOffset: CGFloat = -0.5
-    static let visibleToolbarWidth: CGFloat = 251
     static let trailingIconGap: CGFloat = 8
     static let settingsIconSize: CGFloat = 22
     static let settingsIconXScale: CGFloat = 1.11
@@ -216,25 +209,6 @@ private struct HomeToolbar: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Button {
-                store.beginAddingDevice()
-            } label: {
-                HStack(spacing: 8) {
-                    AppIcon(symbol: "plus", size: HomeToolbarLayoutMetrics.addIconSize)
-                        .offset(x: HomeToolbarLayoutMetrics.addIconXOffset, y: -2)
-                    Text("添加设备")
-                        .font(.custom("AvenirNext-Bold", size: 14))
-                        .offset(x: HomeToolbarLayoutMetrics.addTextXOffset, y: 0.5)
-                }
-                .frame(width: 112, height: 48)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(QuietButtonStyle())
-            .help("添加设备")
-            .accessibilityLabel("添加设备")
-
-            toolbarGap(width: 35)
-
             homeIconButton(
                 symbol: "checkmark.circle",
                 help: "Smart Actions"
@@ -250,18 +224,11 @@ private struct HomeToolbar: View {
             }
         }
         .foregroundStyle(colorScheme == .dark ? AppTheme.text(for: colorScheme) : .black)
-        .frame(width: HomeToolbarLayoutMetrics.visibleToolbarWidth, height: 48)
+        .frame(width: 104, height: 48)
         .offset(
             x: HomeToolbarLayoutMetrics.opticalXOffset,
             y: HomeToolbarLayoutMetrics.opticalYOffset
         )
-    }
-
-    private func toolbarGap(width: CGFloat) -> some View {
-        Rectangle()
-            .fill(AppTheme.separator(for: colorScheme))
-            .frame(width: 1, height: 24)
-            .frame(width: width)
     }
 
     private func homeIconButton(
@@ -290,68 +257,69 @@ private struct HomeToolbar: View {
 
 private struct AIPromptNoticeCard: View {
     @EnvironmentObject private var store: AppStore
+    @Environment(\.colorScheme) private var colorScheme
+
+    private let capabilities = ["摘要", "翻译", "代码解释"]
 
     var body: some View {
-        VStack(spacing: 0) {
-            AIPromptBuilderIllustration()
-                .frame(width: 332, height: 194)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("本地文本工作流")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(AppTheme.text(for: colorScheme))
 
-            VStack(alignment: .leading, spacing: 0) {
-                Text("AI 工作流已整合到\nSmart Actions")
-                    .font(.custom("AvenirNext-Bold", size: 18))
-                    .tracking(-0.12)
-                    .lineSpacing(-4)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .scaleEffect(x: 1, y: 0.92, anchor: .top)
+            Text("从本地模板创建摘要、翻译和代码解释动作。\n配置仅保存在这台 Mac，可直接分配给遥控器。")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(Color.secondary)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 8)
 
-                Text("从本地模板创建 AI 回复、摘要、翻译和代码解释工作流。所有配置只保存在这台 Mac。")
-                    .font(.custom("AvenirNext-Regular", size: 13))
-                    .tracking(0.15)
-                    // The notice keeps the same black card in both app
-                    // appearances. `Color.primary` becomes black in light
-                    // mode and made this copy effectively disappear.
-                    .foregroundStyle(Color.white.opacity(0.76))
-                    .lineSpacing(1.5)
-                    .padding(.top, 11)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .offset(y: -4)
-
-                Button {
-                    store.showAIWorkflowTemplates()
-                } label: {
-                    HStack(spacing: 7) {
-                        Text("浏览 AI 模板")
-                            .font(.custom("AvenirNext-Bold", size: 13))
-                        AppIcon(symbol: "arrow.right", size: 12)
-                    }
-                    .foregroundStyle(Color.black.opacity(0.86))
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                    .background(AppTheme.mint)
-                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            HStack(spacing: 8) {
+                ForEach(capabilities, id: \.self) { capability in
+                    Text(capability)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.text(for: colorScheme).opacity(0.78))
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(AppTheme.elevatedSurface(for: colorScheme).opacity(0.58))
+                        .clipShape(Capsule())
                 }
-                .buttonStyle(QuietButtonStyle())
-                .padding(.top, 19)
-                .offset(y: -4)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 17)
-            .frame(width: 332, height: 216, alignment: .topLeading)
-            .background(Color(white: 0.09))
+            .padding(.top, 16)
+
+            Button {
+                store.showAIWorkflowTemplates()
+            } label: {
+                HStack(spacing: 7) {
+                    Text("浏览工作流")
+                    AppIcon(symbol: "arrow.right", size: 13)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PrimaryActionButtonStyle())
+            .padding(.top, 18)
         }
-        .foregroundStyle(.white)
-        .frame(width: 332, height: 410, alignment: .top)
-        .background(Color(white: 0.09))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(20)
+        .frame(width: 320, alignment: .topLeading)
+        .background(AppTheme.primarySurface(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(AppTheme.separator(for: colorScheme), lineWidth: 1)
+        }
         .overlay(alignment: .top) {
             AIPromptPopoverArrow()
-                .fill(Color(red: 0.72, green: 0.95, blue: 0.94))
-                .frame(width: 22, height: 12)
-                .offset(y: -10)
+                .fill(AppTheme.primarySurface(for: colorScheme))
+                .frame(width: 20, height: 10)
+                .offset(y: -9)
         }
-        .shadow(color: .black.opacity(0.30), radius: 20, y: 10)
+        .shadow(
+            color: .black.opacity(colorScheme == .dark ? 0.34 : 0.13),
+            radius: 18,
+            y: 9
+        )
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("AI 工作流")
+        .accessibilityLabel("本地文本工作流")
     }
 }
 
@@ -363,101 +331,6 @@ private struct AIPromptPopoverArrow: Shape {
         path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
         path.closeSubpath()
         return path
-    }
-}
-
-private struct AIPromptBuilderIllustration: View {
-    var body: some View {
-        ZStack {
-            Color(red: 0.72, green: 0.95, blue: 0.94)
-
-            VStack(spacing: 0) {
-                HStack(spacing: 5) {
-                    AppIcon(symbol: "sparkles", size: 7)
-                    Text("MiCoding AI Workflows")
-                        .font(.system(size: 6, weight: .semibold))
-                    Spacer()
-                    Circle().stroke(lineWidth: 0.7).frame(width: 10, height: 10)
-                    Circle().stroke(lineWidth: 0.7).frame(width: 10, height: 10)
-                    Circle().fill(Color.black.opacity(0.55)).frame(width: 10, height: 10)
-                }
-                .foregroundStyle(Color.white.opacity(0.88))
-                .padding(.horizontal, 6)
-                .frame(height: 20)
-                .background(Color(red: 0.23, green: 0.33, blue: 0.32))
-
-                HStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text("工作流")
-                            .font(.system(size: 7, weight: .semibold))
-                        Label("回复消息", systemImage: "arrow.clockwise")
-                            .foregroundStyle(AppTheme.mint)
-                        Label("汇总文本", systemImage: "doc.text")
-                        Label("翻译文本", systemImage: "arrowshape.turn.up.left")
-                        Label("解释代码", systemImage: "chevron.left.forwardslash.chevron.right")
-                    }
-                    .font(.system(size: 6, weight: .medium))
-                    .padding(7)
-                    .frame(width: 86)
-                    .frame(maxHeight: .infinity, alignment: .topLeading)
-                    .background(Color.black)
-
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("工作流说明")
-                            .font(.system(size: 7, weight: .semibold))
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(Color.black)
-                            .frame(height: 18)
-                            .overlay(alignment: .leading) {
-                                Text("处理当前选择的文本")
-                                    .font(.system(size: 5.5))
-                                    .padding(.horizontal, 5)
-                            }
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(Color.black)
-                            .frame(height: 50)
-                            .overlay(alignment: .topLeading) {
-                                Text("在 Smart Actions 中选择模板，\n再分配给遥控器按键。")
-                                    .font(.system(size: 5.5))
-                                    .lineSpacing(1)
-                                    .padding(5)
-                            }
-                        HStack(spacing: 4) {
-                            promptChip("模板")
-                            promptChip("动作")
-                            Spacer()
-                            Circle()
-                                .fill(Color.black)
-                                .frame(width: 18, height: 18)
-                                .overlay {
-                                    AppIcon(symbol: "arrow.right", size: 7)
-                                        .foregroundStyle(AppTheme.mint)
-                                }
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .padding(7)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .background(Color(red: 0.45, green: 0.55, blue: 0.54))
-                }
-            }
-            .frame(width: 250, height: 128)
-            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(Color.black.opacity(0.28), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
-        }
-    }
-
-    private func promptChip(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 5.5, weight: .medium))
-            .padding(.horizontal, 5)
-            .frame(height: 14)
-            .background(Color.black)
-            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
     }
 }
 

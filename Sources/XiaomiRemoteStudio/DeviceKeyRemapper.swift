@@ -28,6 +28,28 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
         let key: RemotePhysicalKey
     }
 
+    /// Injectable lifecycle seams keep failure-path tests independent from the
+    /// host's Accessibility permission while exercising the same cleanup code
+    /// used by the production event tap and watchdog process.
+    struct LifecycleHooks {
+        var startEventTap: (() -> Bool)?
+        var didStopEventTap: (() -> Void)?
+        var didStopCleanupMonitor: (() -> Void)?
+        var startCleanupMonitor: (([Mapping]) -> Void)?
+
+        init(
+            startEventTap: (() -> Bool)? = nil,
+            didStopEventTap: (() -> Void)? = nil,
+            didStopCleanupMonitor: (() -> Void)? = nil,
+            startCleanupMonitor: (([Mapping]) -> Void)? = nil
+        ) {
+            self.startEventTap = startEventTap
+            self.didStopEventTap = didStopEventTap
+            self.didStopCleanupMonitor = didStopCleanupMonitor
+            self.startCleanupMonitor = startCleanupMonitor
+        }
+    }
+
     /// F13-F20 and uncommon keypad keys have no ordinary text side effects.
     /// Back (0xF1) deliberately stays off this table because hidutil does not
     /// accept usages outside the standard keyboard-page range.
@@ -61,6 +83,7 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
     private let hidutilRunner: HidutilRunner?
     private let startsCleanupMonitor: Bool
     private let requiresEventTap: Bool
+    private let lifecycleHooks: LifecycleHooks?
     private(set) var isInstalled = false
 
     var onLog: ((String) -> Void)?
@@ -73,13 +96,15 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
     init(
         hidutilRunner: HidutilRunner? = nil,
         startsCleanupMonitor: Bool = true,
-        requiresEventTap: Bool? = nil
+        requiresEventTap: Bool? = nil,
+        lifecycleHooks: LifecycleHooks? = nil
     ) {
         self.hidutilRunner = hidutilRunner
         self.startsCleanupMonitor = startsCleanupMonitor
         // Injected hidutil runners are unit tests; do not make them depend on
         // the test host having Accessibility permission.
         self.requiresEventTap = requiresEventTap ?? (hidutilRunner == nil)
+        self.lifecycleHooks = lifecycleHooks
     }
 
     @discardableResult
@@ -97,7 +122,8 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
         isInstalling = true
         defer { isInstalling = false }
 
-        guard !requiresEventTap || startEventTapIfNeeded() else {
+        guard !requiresEventTap || startEventTapForInstall() else {
+            rollbackFailedInstall(restoring: savedForeignMappings)
             onLog?("无法创建按键中转监听；已保留系统原始按键")
             return false
         }
@@ -108,6 +134,7 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
         )
         guard current.succeeded,
               let existing = Self.parseUserKeyMapping(current.output) else {
+            rollbackFailedInstall(restoring: savedForeignMappings)
             onLog?("无法读取设备按键映射，已保留系统原始按键")
             return false
         }
@@ -123,31 +150,79 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
             ["property", "--matching", Self.matching, "--set", Self.mappingJSON(mappings)],
             captureOutput: false
         )
-        isInstalled = result.succeeded
-        if result.succeeded, startsCleanupMonitor {
-            startCleanupMonitorIfNeeded(restoring: savedForeignMappings ?? foreign)
+        guard result.succeeded else {
+            rollbackFailedInstall(restoring: savedForeignMappings ?? foreign)
+            onLog?("遥控器原始按键接管失败")
+            return false
         }
-        onLog?(result.succeeded ? "已接管遥控器原始按键" : "遥控器原始按键接管失败")
-        return result.succeeded
+
+        isInstalled = true
+        if startsCleanupMonitor {
+            startCleanupMonitorForRecovery(restoring: savedForeignMappings ?? foreign)
+        }
+        onLog?("已接管遥控器原始按键")
+        return true
     }
 
     func uninstall() {
         lock.lock()
         defer { lock.unlock() }
-        guard isInstalled || savedForeignMappings != nil else { return }
 
+        let shouldRestoreMapping = isInstalled || savedForeignMappings != nil
         let mappings = savedForeignMappings ?? []
+
+        // Stop interception first even when installation never completed. A
+        // failed `hidutil --get` must not leave relay keys swallowed globally.
+        stopEventTap()
+        stopCleanupMonitor()
+        isInstalled = false
+
+        guard shouldRestoreMapping else { return }
+
         let result = runHidutil(
             ["property", "--matching", Self.matching, "--set", Self.mappingJSON(mappings)],
             captureOutput: false
         )
         if result.succeeded {
             savedForeignMappings = nil
-            isInstalled = false
-            stopCleanupMonitor()
-            stopEventTap()
         } else {
+            savedForeignMappings = mappings
+            if startsCleanupMonitor {
+                startCleanupMonitorForRecovery(restoring: mappings)
+            }
             onLog?("恢复设备原始按键映射失败")
+        }
+    }
+
+    private func startEventTapForInstall() -> Bool {
+        lifecycleHooks?.startEventTap?() ?? startEventTapIfNeeded()
+    }
+
+    /// Rolls a partially completed install back to the pre-install mapping and
+    /// always tears down process-wide interception state. The rollback itself is
+    /// best effort. A failed rollback keeps the original mapping and watchdog
+    /// state so a later uninstall or process-exit cleanup can retry safely.
+    private func rollbackFailedInstall(restoring mappings: [Mapping]?) {
+        stopEventTap()
+        stopCleanupMonitor()
+        isInstalled = false
+
+        guard let mappings else {
+            savedForeignMappings = nil
+            return
+        }
+        savedForeignMappings = mappings
+        let result = runHidutil(
+            ["property", "--matching", Self.matching, "--set", Self.mappingJSON(mappings)],
+            captureOutput: false
+        )
+        if result.succeeded {
+            savedForeignMappings = nil
+        } else {
+            if startsCleanupMonitor {
+                startCleanupMonitorForRecovery(restoring: mappings)
+            }
+            onLog?("安装回滚时无法恢复设备原始按键映射")
         }
     }
 
@@ -240,6 +315,14 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
         )
     }
 
+    private func startCleanupMonitorForRecovery(restoring mappings: [Mapping]) {
+        if let startCleanupMonitor = lifecycleHooks?.startCleanupMonitor {
+            startCleanupMonitor(mappings)
+            return
+        }
+        startCleanupMonitorIfNeeded(restoring: mappings)
+    }
+
     private func startCleanupMonitorIfNeeded(restoring mappings: [Mapping]) {
         guard cleanupMonitor == nil else { return }
 
@@ -271,6 +354,7 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
         cleanupLifetime?.closeFile()
         cleanupMonitor = nil
         cleanupLifetime = nil
+        lifecycleHooks?.didStopCleanupMonitor?()
     }
 
     private func startEventTapIfNeeded() -> Bool {
@@ -313,6 +397,7 @@ final class DeviceKeyRemapper: DeviceKeyRemapping {
         }
         eventTap = nil
         eventTapSource = nil
+        lifecycleHooks?.didStopEventTap?()
     }
 
     private func handleEventTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {

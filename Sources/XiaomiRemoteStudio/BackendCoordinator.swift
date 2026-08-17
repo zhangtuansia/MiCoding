@@ -70,9 +70,13 @@ final class BackendCoordinator {
     }
 
     func startAutomationTriggers() {
-        guard !automationTriggersStarted else { return }
-        automationTriggersStarted = true
-        applicationMonitor.start()
+        if !automationTriggersStarted {
+            automationTriggersStarted = true
+            applicationMonitor.start()
+        }
+        // Global event monitoring can fail while Accessibility is denied.
+        // Calling start again lets the monitor fill in whichever observer is
+        // still missing after the user grants permission at runtime.
         shortcutMonitor.start()
     }
 
@@ -99,29 +103,44 @@ final class BackendCoordinator {
         gestureEngine.reset()
     }
 
-    func execute(actionID: String, source: String) {
+    @discardableResult
+    func execute(actionID: String, source: String) async -> ActionExecutionResult {
         backendLogger.info("execute action=\(actionID, privacy: .public) source=\(source, privacy: .public)")
         let command = resolveCommand?(actionID) ?? ActionCommand.command(for: actionID)
-        execute(command: command, source: source, logIdentifier: actionID)
+        return await execute(command: command, source: source, logIdentifier: actionID)
     }
 
-    func execute(command: ActionCommand, source: String) {
+    @discardableResult
+    func execute(command: ActionCommand, source: String) async -> ActionExecutionResult {
         backendLogger.info("execute preview source=\(source, privacy: .public)")
-        execute(command: command, source: source, logIdentifier: "preview")
+        return await execute(command: command, source: source, logIdentifier: "preview")
     }
 
-    private func execute(command: ActionCommand, source: String, logIdentifier: String) {
+    private func execute(
+        command: ActionCommand,
+        source: String,
+        logIdentifier: String
+    ) async -> ActionExecutionResult {
         guard command != .none else {
-            onLog?("动作 \(logIdentifier) 尚无可用执行器")
-            return
+            let message = "动作 \(logIdentifier) 尚无可用执行器"
+            onLog?(message)
+            return .failure(message)
         }
-        executor.execute(command)
-        onLog?("\(source) → \(logIdentifier)")
+        let result = await executor.execute(command)
+        switch result {
+        case .success:
+            onLog?("\(source) → \(logIdentifier)")
+        case let .failure(message):
+            onLog?("\(source) → \(logIdentifier) 失败：\(message)")
+        }
+        return result
     }
 
     private func wireServices() {
         shortcutMonitor.onTrigger = { [weak self] actionID in
-            self?.execute(actionID: actionID, source: "快捷键触发器")
+            Task { @MainActor [weak self] in
+                await self?.execute(actionID: actionID, source: "快捷键触发器")
+            }
         }
         keyRemapper?.onLog = { [weak self] message in
             Task { @MainActor in self?.onLog?(message) }
@@ -200,7 +219,9 @@ final class BackendCoordinator {
                     continue
                 }
                 self.lastApplicationTriggerDates[actionID] = now
-                self.execute(actionID: actionID, source: "应用触发器")
+                Task { @MainActor [weak self] in
+                    await self?.execute(actionID: actionID, source: "应用触发器")
+                }
             }
         }
 
@@ -224,10 +245,12 @@ final class BackendCoordinator {
                 self.onLog?("执行 voice.tap → typeless-dictation（硬件 F20）")
                 return
             }
-            self.execute(
-                actionID: actionID,
-                source: "执行 \(resolved.slotID).\(resolved.trigger.rawValue)"
-            )
+            Task { @MainActor [weak self] in
+                await self?.execute(
+                    actionID: actionID,
+                    source: "执行 \(resolved.slotID).\(resolved.trigger.rawValue)"
+                )
+            }
         }
     }
 

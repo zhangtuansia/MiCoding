@@ -1678,7 +1678,7 @@ private struct DeviceSmartActionCard: View {
 
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
-    @State private var didRun = false
+    @State private var runFeedback = ActionRunFeedbackState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1715,14 +1715,26 @@ private struct DeviceSmartActionCard: View {
 
             Button(action: run) {
                 HStack(spacing: 7) {
-                    AppIcon(symbol: didRun ? "checkmark" : "play.fill", size: AppIconSize.indicator)
-                    Text(didRun ? "已运行" : "运行")
+                    AppIcon(
+                        symbol: runFeedback.didSucceed ? "checkmark" : "play.fill",
+                        size: AppIconSize.indicator
+                    )
+                    Text(
+                        runFeedback.didSucceed
+                            ? "已运行"
+                            : (runFeedback.isRunning ? "运行中" : "运行")
+                    )
                         .font(AppTypography.bodyMedium)
                 }
-                .foregroundStyle(didRun ? AppTheme.success : AppTheme.accent(for: colorScheme))
+                .foregroundStyle(
+                    runFeedback.didSucceed
+                        ? AppTheme.success
+                        : AppTheme.accent(for: colorScheme)
+                )
                 .frame(maxWidth: .infinity, minHeight: 56)
             }
             .buttonStyle(QuietButtonStyle())
+            .disabled(!runFeedback.canRun)
         }
         .frame(width: 260, height: 320)
         .background(AppTheme.surface(for: colorScheme))
@@ -1735,10 +1747,14 @@ private struct DeviceSmartActionCard: View {
     }
 
     private func run() {
-        didRun = true
-        store.runAction(actionID: action.actionID, title: action.title)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) {
-            didRun = false
+        guard runFeedback.begin() else { return }
+        store.runAction(actionID: action.actionID, title: action.title) { result in
+            runFeedback.complete(with: result)
+            guard runFeedback.didSucceed else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) {
+                guard runFeedback.didSucceed else { return }
+                runFeedback.reset()
+            }
         }
     }
 }

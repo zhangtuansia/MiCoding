@@ -479,7 +479,7 @@ enum SmartActionTrigger: Codable, Equatable, Sendable {
     case shortcut(keyCode: UInt16, flags: UInt64, name: String)
 
     private static let supportedModifierMask = UInt64(
-        (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20)
+        (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 23)
     )
 
     var isValid: Bool {
@@ -583,12 +583,15 @@ struct DeviceConfigurationBackup: Codable, Equatable, Sendable {
 
 enum DeviceConfigurationBackupError: LocalizedError, Equatable {
     case unsupportedVersion(Int)
+    case unsupportedConfigurationVersion(Int)
     case incompatibleDevice(String)
 
     var errorDescription: String? {
         switch self {
         case let .unsupportedVersion(version):
             "无法读取版本为 \(version) 的设备备份"
+        case let .unsupportedConfigurationVersion(version):
+            "此备份包含不受支持的配置版本 \(version)"
         case let .incompatibleDevice(deviceID):
             "此备份属于其他设备（\(deviceID)）"
         }

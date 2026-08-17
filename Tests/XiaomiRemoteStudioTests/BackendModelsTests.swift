@@ -4,6 +4,27 @@ import XCTest
 @testable import XiaomiRemoteStudio
 
 final class BackendModelsTests: XCTestCase {
+    @MainActor
+    private func makeIsolatedStore(
+        runtimeServicesEnabled: Bool = false,
+        initialDeviceSnapshot: BluetoothDeviceSnapshot? = nil,
+        backendCoordinator: BackendCoordinator? = nil
+    ) -> AppStore {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiCoding-IsolatedTest-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        return AppStore(
+            configurationStore: LocalConfigurationStore(
+                fileURL: directory.appendingPathComponent("config.json")
+            ),
+            runtimeServicesEnabled: runtimeServicesEnabled,
+            initialDeviceSnapshot: initialDeviceSnapshot,
+            backendCoordinator: backendCoordinator
+        )
+    }
+
     func testLatinDisplayFontUsesTheLighterReferenceWeight() {
         XCTAssertEqual(AppTypography.latinDisplayFontName, "AvenirNext-DemiBold")
         XCTAssertNotNil(NSFont(name: AppTypography.latinDisplayFontName, size: 33))
@@ -88,10 +109,7 @@ final class BackendModelsTests: XCTestCase {
 
     @MainActor
     func testUserInitiatedBackendRestartReportsTheRealOutcome() {
-        let store = AppStore(
-            configurationStore: LocalConfigurationStore(fileURL: nil),
-            runtimeServicesEnabled: false
-        )
+        let store = makeIsolatedStore()
 
         store.permissions = PermissionSnapshot(
             accessibilityGranted: true,
@@ -210,10 +228,6 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(HomeToolbarLayoutMetrics.greetingWidthScale, 1, accuracy: 0.001)
         XCTAssertEqual(HomeToolbarLayoutMetrics.greetingHeightScale, 1, accuracy: 0.001)
         XCTAssertEqual(HomeToolbarLayoutMetrics.greetingYOffset, 0.5, accuracy: 0.001)
-        XCTAssertEqual(HomeToolbarLayoutMetrics.addIconSize, 22, accuracy: 0.001)
-        XCTAssertEqual(HomeToolbarLayoutMetrics.addIconXOffset, -2, accuracy: 0.001)
-        XCTAssertEqual(HomeToolbarLayoutMetrics.addTextXOffset, -0.5, accuracy: 0.001)
-        XCTAssertEqual(HomeToolbarLayoutMetrics.visibleToolbarWidth, 251, accuracy: 0.001)
         XCTAssertEqual(HomeToolbarLayoutMetrics.trailingIconGap, 8, accuracy: 0.001)
         XCTAssertEqual(HomeToolbarLayoutMetrics.settingsIconSize, 22, accuracy: 0.001)
         XCTAssertEqual(HomeToolbarLayoutMetrics.settingsIconXScale, 1.11, accuracy: 0.001)
@@ -477,7 +491,7 @@ final class BackendModelsTests: XCTestCase {
 
     @MainActor
     func testAIWorkflowToolbarEntryRoutesToAITemplates() {
-        let store = AppStore(runtimeServicesEnabled: false)
+        let store = makeIsolatedStore()
 
         store.toggleAIPromptNotice()
         XCTAssertTrue(store.showsAIPromptNotice)
@@ -829,6 +843,196 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(setCount, 2)
     }
 
+    func testDeviceKeyRemapperCleansUpWhenMappingReadFails() {
+        var stoppedEventTapCount = 0
+        var stoppedCleanupMonitorCount = 0
+        var setCount = 0
+        let remapper = DeviceKeyRemapper(
+            hidutilRunner: { arguments, _ in
+                if arguments.contains("--get") { return (false, "") }
+                if arguments.contains("--set") { setCount += 1 }
+                return (true, "")
+            },
+            startsCleanupMonitor: false,
+            requiresEventTap: true,
+            lifecycleHooks: .init(
+                startEventTap: { true },
+                didStopEventTap: { stoppedEventTapCount += 1 },
+                didStopCleanupMonitor: { stoppedCleanupMonitorCount += 1 }
+            )
+        )
+
+        XCTAssertFalse(remapper.install())
+        XCTAssertFalse(remapper.isInstalled)
+        XCTAssertTrue(remapper.activeRemappedSlotIDs.isEmpty)
+        XCTAssertEqual(stoppedEventTapCount, 1)
+        XCTAssertEqual(stoppedCleanupMonitorCount, 1)
+        XCTAssertEqual(setCount, 0)
+
+        remapper.uninstall()
+        XCTAssertEqual(stoppedEventTapCount, 2, "uninstall must stop interception even without saved state")
+        XCTAssertEqual(stoppedCleanupMonitorCount, 2)
+        XCTAssertEqual(setCount, 0)
+    }
+
+    func testDeviceKeyRemapperCleansUpWhenMappingOutputCannotBeParsed() {
+        var stoppedEventTapCount = 0
+        var stoppedCleanupMonitorCount = 0
+        let remapper = DeviceKeyRemapper(
+            hidutilRunner: { arguments, _ in
+                if arguments.contains("--get") {
+                    return (true, "RegistryID Key Value\nmalformed UserKeyMapping output")
+                }
+                return (true, "")
+            },
+            startsCleanupMonitor: false,
+            requiresEventTap: true,
+            lifecycleHooks: .init(
+                startEventTap: { true },
+                didStopEventTap: { stoppedEventTapCount += 1 },
+                didStopCleanupMonitor: { stoppedCleanupMonitorCount += 1 }
+            )
+        )
+
+        XCTAssertFalse(remapper.install())
+        XCTAssertFalse(remapper.isInstalled)
+        XCTAssertTrue(remapper.activeRemappedSlotIDs.isEmpty)
+        XCTAssertEqual(stoppedEventTapCount, 1)
+        XCTAssertEqual(stoppedCleanupMonitorCount, 1)
+    }
+
+    func testDeviceKeyRemapperRollsBackWhenApplyingMappingFails() throws {
+        var stoppedEventTapCount = 0
+        var stoppedCleanupMonitorCount = 0
+        var setPayloads: [String] = []
+        let foreignSource: UInt64 = 0x700000004
+        let foreignDestination: UInt64 = 0x700000005
+        let output = """
+        RegistryID Key Value
+        1000ca40b UserKeyMapping (
+          {
+            HIDKeyboardModifierMappingDst = \(foreignDestination);
+            HIDKeyboardModifierMappingSrc = \(foreignSource);
+          }
+        )
+        """
+        let remapper = DeviceKeyRemapper(
+            hidutilRunner: { arguments, _ in
+                if arguments.contains("--get") { return (true, output) }
+                if arguments.contains("--set") {
+                    setPayloads.append(arguments.last ?? "")
+                    // Fail the requested mapping, then allow the rollback.
+                    return (setPayloads.count > 1, "")
+                }
+                return (false, "")
+            },
+            startsCleanupMonitor: false,
+            requiresEventTap: true,
+            lifecycleHooks: .init(
+                startEventTap: { true },
+                didStopEventTap: { stoppedEventTapCount += 1 },
+                didStopCleanupMonitor: { stoppedCleanupMonitorCount += 1 }
+            )
+        )
+
+        XCTAssertFalse(remapper.install())
+        XCTAssertFalse(remapper.isInstalled)
+        XCTAssertTrue(remapper.activeRemappedSlotIDs.isEmpty)
+        XCTAssertEqual(stoppedEventTapCount, 1)
+        XCTAssertEqual(stoppedCleanupMonitorCount, 1)
+        XCTAssertEqual(setPayloads.count, 2)
+        XCTAssertTrue(setPayloads[0].contains(String(DeviceKeyRemapper.ownMappings[0].source)))
+        XCTAssertTrue(setPayloads[1].contains(String(foreignSource)))
+        XCTAssertTrue(setPayloads[1].contains(String(foreignDestination)))
+        XCTAssertFalse(setPayloads[1].contains(String(DeviceKeyRemapper.ownMappings[0].source)))
+    }
+
+    func testDeviceKeyRemapperRetainsRecoveryAfterApplyAndRollbackBothFail() {
+        var setPayloads: [String] = []
+        var watchdogMappings: [[DeviceKeyRemapper.Mapping]] = []
+        let foreignSource: UInt64 = 0x700000004
+        let foreignDestination: UInt64 = 0x700000005
+        let output = """
+        RegistryID Key Value
+        1000ca40b UserKeyMapping (
+          {
+            HIDKeyboardModifierMappingDst = \(foreignDestination);
+            HIDKeyboardModifierMappingSrc = \(foreignSource);
+          }
+        )
+        """
+        let remapper = DeviceKeyRemapper(
+            hidutilRunner: { arguments, _ in
+                if arguments.contains("--get") { return (true, output) }
+                if arguments.contains("--set") {
+                    setPayloads.append(arguments.last ?? "")
+                    // Applying the relay and its immediate rollback both fail;
+                    // the later uninstall retry succeeds.
+                    return (setPayloads.count >= 3, "")
+                }
+                return (false, "")
+            },
+            startsCleanupMonitor: true,
+            requiresEventTap: true,
+            lifecycleHooks: .init(
+                startEventTap: { true },
+                startCleanupMonitor: { watchdogMappings.append($0) }
+            )
+        )
+
+        XCTAssertFalse(remapper.install())
+        XCTAssertFalse(remapper.isInstalled)
+        XCTAssertTrue(remapper.activeRemappedSlotIDs.isEmpty)
+        XCTAssertEqual(setPayloads.count, 2)
+        XCTAssertEqual(watchdogMappings.count, 1)
+        XCTAssertEqual(watchdogMappings[0].first?.source, foreignSource)
+        XCTAssertEqual(watchdogMappings[0].first?.destination, foreignDestination)
+
+        remapper.uninstall()
+        XCTAssertEqual(setPayloads.count, 3)
+        XCTAssertTrue(setPayloads[2].contains(String(foreignSource)))
+        XCTAssertTrue(setPayloads[2].contains(String(foreignDestination)))
+        XCTAssertFalse(setPayloads[2].contains(String(DeviceKeyRemapper.ownMappings[0].source)))
+        XCTAssertEqual(watchdogMappings.count, 1, "successful uninstall must not restart recovery watchdog")
+
+        remapper.uninstall()
+        XCTAssertEqual(setPayloads.count, 3, "successful recovery must clear saved mapping state")
+    }
+
+    func testDeviceKeyRemapperUninstallStopsInterceptionBeforeRestoringMapping() {
+        var lifecycleTrace: [String] = []
+        let remapper = DeviceKeyRemapper(
+            hidutilRunner: { arguments, _ in
+                if arguments.contains("--get") {
+                    return (true, "RegistryID Key Value\n1000dab81 UserKeyMapping (null)\n")
+                }
+                if arguments.contains("--set") {
+                    lifecycleTrace.append("hidutil.set")
+                    return (true, "")
+                }
+                return (false, "")
+            },
+            startsCleanupMonitor: false,
+            requiresEventTap: true,
+            lifecycleHooks: .init(
+                startEventTap: { true },
+                didStopEventTap: { lifecycleTrace.append("eventTap.stop") },
+                didStopCleanupMonitor: { lifecycleTrace.append("cleanupMonitor.stop") }
+            )
+        )
+
+        XCTAssertTrue(remapper.install())
+        lifecycleTrace.removeAll()
+        remapper.uninstall()
+
+        XCTAssertEqual(
+            lifecycleTrace,
+            ["eventTap.stop", "cleanupMonitor.stop", "hidutil.set"]
+        )
+        XCTAssertFalse(remapper.isInstalled)
+        XCTAssertTrue(remapper.activeRemappedSlotIDs.isEmpty)
+    }
+
     @MainActor
     func testStoppingInputRestoresMappingAndIgnoresLateReconnectCallback() async {
         let input = PreviewRemoteInputService()
@@ -980,9 +1184,15 @@ final class BackendModelsTests: XCTestCase {
         let configurationStore = LocalConfigurationStore(
             fileURL: directory.appendingPathComponent("config.json")
         )
+        let runtimeGestureEngine = RemoteGestureEngine()
+        let runtimeCoordinator = BackendCoordinator(
+            gestureEngine: runtimeGestureEngine,
+            keyRemapper: nil
+        )
         let store = AppStore(
             configurationStore: configurationStore,
-            runtimeServicesEnabled: false
+            runtimeServicesEnabled: false,
+            backendCoordinator: runtimeCoordinator
         )
         let okSlot = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "ok" }))
         let copyAction = try XCTUnwrap(RemoteAction.catalog.first(where: { $0.id == "copy" }))
@@ -991,6 +1201,8 @@ final class BackendModelsTests: XCTestCase {
         store.selectSlot(okSlot)
         store.assign(copyAction, to: okSlot)
         store.setHoldMilliseconds(725)
+        store.setDoubleTapMilliseconds(475)
+        store.setDebounceMilliseconds(90)
         let action = SmartAction(
             id: "backup-action",
             actionID: "custom-smart-backup",
@@ -1011,10 +1223,20 @@ final class BackendModelsTests: XCTestCase {
 
         store.assign(lockAction, to: okSlot)
         store.setHoldMilliseconds(400)
+        store.setDoubleTapMilliseconds(200)
+        store.setDebounceMilliseconds(20)
+        XCTAssertEqual(runtimeGestureEngine.holdMilliseconds, 400)
+        XCTAssertEqual(runtimeGestureEngine.doubleTapMilliseconds, 200)
+        XCTAssertEqual(runtimeGestureEngine.debounceMilliseconds, 20)
         try store.restoreDeviceBackupData(backupData)
 
         XCTAssertEqual(store.action(for: "ok")?.id, "copy")
         XCTAssertEqual(store.holdMilliseconds, 725)
+        XCTAssertEqual(store.doubleTapMilliseconds, 475)
+        XCTAssertEqual(store.debounceMilliseconds, 90)
+        XCTAssertEqual(runtimeGestureEngine.holdMilliseconds, 725)
+        XCTAssertEqual(runtimeGestureEngine.doubleTapMilliseconds, 475)
+        XCTAssertEqual(runtimeGestureEngine.debounceMilliseconds, 90)
         XCTAssertTrue(store.smartActions.contains(where: { $0.actionID == action.actionID }))
 
         let reloaded = AppStore(
@@ -1165,7 +1387,7 @@ final class BackendModelsTests: XCTestCase {
 
     @MainActor
     func testApplicationPickerTogglesAProfileWithoutClosingThePanel() {
-        let store = AppStore(configurationStore: LocalConfigurationStore(fileURL: nil))
+        let store = makeIsolatedStore()
         let profile = AppProfile(
             id: "com.example.profile-test",
             title: "Profile Test",
@@ -1220,7 +1442,7 @@ final class BackendModelsTests: XCTestCase {
 
     @MainActor
     func testTriggerSelectionPersistsWhileConfiguringMultipleButtons() throws {
-        let store = AppStore(configurationStore: LocalConfigurationStore(fileURL: nil))
+        let store = makeIsolatedStore()
         let power = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "power" }))
         let voice = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "voice" }))
 
@@ -1547,6 +1769,325 @@ final class BackendModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testModifierOnlyFunctionShortcutIsValidNormalizedAndMatchesExactly() {
+        let functionFlags = UInt64(NSEvent.ModifierFlags.function.rawValue)
+        let shortcut = SmartActionTrigger.shortcut(
+            keyCode: 63,
+            flags: functionFlags,
+            name: "fn"
+        )
+        XCTAssertTrue(shortcut.isValid)
+
+        XCTAssertEqual(
+            GlobalShortcutMonitor.normalizedFlags([.function, .capsLock]),
+            functionFlags,
+            "全局监听必须保留 fn，同时丢弃不支持的 Caps Lock 状态"
+        )
+
+        let bindings = [
+            GlobalShortcutBinding(
+                actionID: "modifier-only-function",
+                keyCode: 63,
+                flags: functionFlags
+            )
+        ]
+        XCTAssertEqual(
+            GlobalShortcutMonitor.actionID(
+                forKeyCode: 63,
+                flags: functionFlags,
+                in: bindings
+            ),
+            "modifier-only-function"
+        )
+        XCTAssertNil(
+            GlobalShortcutMonitor.actionID(
+                forKeyCode: 63,
+                flags: 0,
+                in: bindings
+            ),
+            "modifier-only 快捷键不得在 fn 未按下时误触发"
+        )
+        XCTAssertNil(
+            GlobalShortcutMonitor.actionID(
+                forKeyCode: 55,
+                flags: functionFlags,
+                in: bindings
+            ),
+            "相同修饰状态下仍必须精确匹配物理键码"
+        )
+    }
+
+    @MainActor
+    func testGlobalShortcutStateMachineCommitsModifierOnlyCommandOnRelease() {
+        let monitor = GlobalShortcutMonitor()
+        monitor.update(bindings: [
+            GlobalShortcutBinding(
+                actionID: "command-only",
+                keyCode: 55,
+                flags: UInt64(NSEvent.ModifierFlags.command.rawValue)
+            )
+        ])
+
+        XCTAssertNil(
+            monitor.processEvent(
+                type: .flagsChanged,
+                keyCode: 55,
+                modifierFlags: [.command]
+            ),
+            "仅修饰键必须等到松开才能提交，避免抢先触发组合键前缀"
+        )
+        XCTAssertEqual(
+            monitor.processEvent(
+                type: .flagsChanged,
+                keyCode: 55,
+                modifierFlags: []
+            ),
+            "command-only"
+        )
+    }
+
+    @MainActor
+    func testGlobalShortcutStateMachinePrefersCommandChordOverModifierOnlyPrefix() {
+        let monitor = GlobalShortcutMonitor()
+        let commandFlags = UInt64(NSEvent.ModifierFlags.command.rawValue)
+        monitor.update(bindings: [
+            GlobalShortcutBinding(
+                actionID: "command-only",
+                keyCode: 55,
+                flags: commandFlags
+            ),
+            GlobalShortcutBinding(
+                actionID: "command-c",
+                keyCode: 8,
+                flags: commandFlags
+            )
+        ])
+
+        XCTAssertNil(
+            monitor.processEvent(
+                type: .flagsChanged,
+                keyCode: 55,
+                modifierFlags: [.command]
+            )
+        )
+        XCTAssertEqual(
+            monitor.processEvent(
+                type: .keyDown,
+                keyCode: 8,
+                modifierFlags: [.command]
+            ),
+            "command-c",
+            "Cmd+C 有精确绑定时应触发组合键"
+        )
+        XCTAssertNil(
+            monitor.processEvent(
+                type: .flagsChanged,
+                keyCode: 55,
+                modifierFlags: []
+            ),
+            "组合键已消耗本次修饰键手势，Cmd-only 不得在松开时补触发"
+        )
+    }
+
+    @MainActor
+    func testGlobalShortcutStateMachineCommitsFunctionOnlyOnRelease() {
+        let monitor = GlobalShortcutMonitor()
+        monitor.update(bindings: [
+            GlobalShortcutBinding(
+                actionID: "function-only",
+                keyCode: 63,
+                flags: UInt64(NSEvent.ModifierFlags.function.rawValue)
+            )
+        ])
+
+        XCTAssertNil(
+            monitor.processEvent(
+                type: .flagsChanged,
+                keyCode: 63,
+                modifierFlags: [.function]
+            )
+        )
+        XCTAssertEqual(
+            monitor.processEvent(
+                type: .flagsChanged,
+                keyCode: 63,
+                modifierFlags: []
+            ),
+            "function-only"
+        )
+    }
+
+    @MainActor
+    func testGlobalShortcutHardwarePollCommitsFunctionWhenAppKitEventsAreSwallowed() {
+        let monitor = GlobalShortcutMonitor()
+        monitor.update(bindings: [
+            GlobalShortcutBinding(
+                actionID: "function-only",
+                keyCode: 63,
+                flags: UInt64(NSEvent.ModifierFlags.function.rawValue)
+            )
+        ])
+
+        XCTAssertNil(
+            monitor.observeFunctionModifierState(currentModifiers: [.function]),
+            "轮询检测到 fn 按下时仍须等待释放"
+        )
+        XCTAssertNil(
+            monitor.observeFunctionModifierState(currentModifiers: [.function]),
+            "同一硬件状态的连续轮询不得重复推进手势"
+        )
+        XCTAssertEqual(
+            monitor.observeFunctionModifierState(currentModifiers: []),
+            "function-only",
+            "即使 AppKit 吞掉 fn 的 down/up，硬件状态轮询仍应在释放时提交"
+        )
+        XCTAssertNil(
+            monitor.observeFunctionModifierState(currentModifiers: []),
+            "释放后的连续轮询不得重复触发"
+        )
+    }
+
+    @MainActor
+    func testGlobalShortcutHardwarePollAndAppKitEventsDoNotDoubleFire() {
+        let monitor = GlobalShortcutMonitor()
+        monitor.update(bindings: [
+            GlobalShortcutBinding(
+                actionID: "function-only",
+                keyCode: 63,
+                flags: UInt64(NSEvent.ModifierFlags.function.rawValue)
+            )
+        ])
+
+        XCTAssertNil(
+            monitor.processEvent(
+                type: .flagsChanged,
+                keyCode: 63,
+                modifierFlags: [.function]
+            )
+        )
+        XCTAssertNil(
+            monitor.observeFunctionModifierState(currentModifiers: [.function]),
+            "AppKit 已报告按下后，轮询不得重复制造一次按下"
+        )
+        XCTAssertEqual(
+            monitor.processEvent(
+                type: .flagsChanged,
+                keyCode: 63,
+                modifierFlags: []
+            ),
+            "function-only"
+        )
+        XCTAssertNil(
+            monitor.observeFunctionModifierState(currentModifiers: []),
+            "AppKit 已提交释放后，轮询不得再次提交"
+        )
+    }
+
+    @MainActor
+    func testGlobalShortcutFunctionChordConsumesModifierOnlyPrefixAcrossPollRaces() {
+        let functionFlags = UInt64(NSEvent.ModifierFlags.function.rawValue)
+        let bindings = [
+            GlobalShortcutBinding(
+                actionID: "function-only",
+                keyCode: 63,
+                flags: functionFlags
+            ),
+            GlobalShortcutBinding(
+                actionID: "function-c",
+                keyCode: 8,
+                flags: functionFlags
+            )
+        ]
+
+        let pollFirstMonitor = GlobalShortcutMonitor()
+        pollFirstMonitor.update(bindings: bindings)
+        XCTAssertNil(
+            pollFirstMonitor.observeFunctionModifierState(currentModifiers: [.function])
+        )
+        XCTAssertEqual(
+            pollFirstMonitor.processEvent(
+                type: .keyDown,
+                keyCode: 8,
+                modifierFlags: [.function]
+            ),
+            "function-c"
+        )
+        XCTAssertNil(
+            pollFirstMonitor.observeFunctionModifierState(currentModifiers: []),
+            "fn+C 已触发后，释放 fn 不得补触发 fn-only"
+        )
+
+        let keyFirstMonitor = GlobalShortcutMonitor()
+        keyFirstMonitor.update(bindings: bindings)
+        XCTAssertEqual(
+            keyFirstMonitor.processEvent(
+                type: .keyDown,
+                keyCode: 8,
+                modifierFlags: [.function]
+            ),
+            "function-c",
+            "轮询尚未观察到 fn-down 时，组合键仍须正常触发"
+        )
+        XCTAssertNil(
+            keyFirstMonitor.observeFunctionModifierState(currentModifiers: [.function])
+        )
+        XCTAssertNil(
+            keyFirstMonitor.observeFunctionModifierState(currentModifiers: []),
+            "迟到的 fn 轮询不得在组合键后制造 modifier-only 重复触发"
+        )
+    }
+
+    @MainActor
+    func testGlobalShortcutStateMachineIgnoresSyntheticAndRepeatedEvents() {
+        let monitor = GlobalShortcutMonitor()
+        monitor.update(bindings: [
+            GlobalShortcutBinding(
+                actionID: "command-c",
+                keyCode: 8,
+                flags: UInt64(NSEvent.ModifierFlags.command.rawValue)
+            ),
+            GlobalShortcutBinding(
+                actionID: "function-only",
+                keyCode: 63,
+                flags: UInt64(NSEvent.ModifierFlags.function.rawValue)
+            )
+        ])
+
+        XCTAssertNil(
+            monitor.processEvent(
+                type: .keyDown,
+                keyCode: 8,
+                modifierFlags: [.command],
+                isRepeat: true
+            )
+        )
+        XCTAssertNil(
+            monitor.processEvent(
+                type: .keyDown,
+                keyCode: 8,
+                modifierFlags: [.command],
+                isSynthetic: true
+            )
+        )
+        XCTAssertNil(
+            monitor.processEvent(
+                type: .flagsChanged,
+                keyCode: 63,
+                modifierFlags: [.function],
+                isSynthetic: true
+            )
+        )
+        XCTAssertNil(
+            monitor.processEvent(
+                type: .flagsChanged,
+                keyCode: 63,
+                modifierFlags: []
+            ),
+            "被忽略的合成事件不得污染修饰键状态"
+        )
+    }
+
+    @MainActor
     func testConflictingGlobalShortcutCannotBeEnabled() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MiCoding-ShortcutConflict-\(UUID().uuidString)", isDirectory: true)
@@ -1767,7 +2308,7 @@ final class BackendModelsTests: XCTestCase {
     }
 
     @MainActor
-    func testBackendCoordinatorUsesCustomCommandResolver() {
+    func testBackendCoordinatorUsesCustomCommandResolver() async {
         let executor = RecordingActionExecutor()
         let coordinator = BackendCoordinator(executor: executor, keyRemapper: nil)
         coordinator.resolveCommand = { actionID in
@@ -1776,8 +2317,9 @@ final class BackendModelsTests: XCTestCase {
                 : nil
         }
 
-        coordinator.execute(actionID: "custom-smart-test", source: "test")
+        let result = await coordinator.execute(actionID: "custom-smart-test", source: "test")
 
+        XCTAssertEqual(result, .success)
         XCTAssertEqual(
             executor.commands,
             [.sequence([.openDefaultBrowser, .system(.mute)])]
@@ -1982,8 +2524,133 @@ final class BackendModelsTests: XCTestCase {
         })
     }
 
+    func testSpecialActionEligibilityIsCentralizedByPlacement() throws {
+        let folder = try XCTUnwrap(
+            RemoteAction.catalog.first(where: { $0.eligibility == .actionsRingOnly })
+        )
+        let typeless = try XCTUnwrap(
+            RemoteAction.catalog.first(where: { $0.eligibility == .voiceButtonTapOnly })
+        )
+        let voice = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "voice" }))
+        let ok = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "ok" }))
+
+        XCTAssertTrue(folder.isEligible(for: .actionsRing))
+        XCTAssertFalse(folder.isEligible(for: .smartActionStep))
+        for slot in RemoteButtonSlot.demoSlots {
+            for trigger in RemoteTrigger.allCases {
+                XCTAssertFalse(slot.accepts(folder, trigger: trigger))
+            }
+        }
+
+        XCTAssertTrue(voice.accepts(typeless, trigger: .tap))
+        XCTAssertFalse(voice.accepts(typeless, trigger: .hold))
+        XCTAssertFalse(voice.accepts(typeless, trigger: .doubleTap))
+        XCTAssertFalse(ok.accepts(typeless, trigger: .tap))
+        XCTAssertFalse(typeless.isEligible(for: .actionsRing))
+        XCTAssertFalse(typeless.isEligible(for: .smartActionStep))
+    }
+
     @MainActor
-    func testActionsRingParameterActionsMapToNativeControlsAndScrollEvents() throws {
+    func testAppStoreCannotBypassSpecialActionPlacementRules() throws {
+        let store = makeIsolatedStore()
+        let folder = try XCTUnwrap(
+            RemoteAction.catalog.first(where: { $0.eligibility == .actionsRingOnly })
+        )
+        let typeless = try XCTUnwrap(
+            RemoteAction.catalog.first(where: { $0.eligibility == .voiceButtonTapOnly })
+        )
+        let voice = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "voice" }))
+        let ok = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "ok" }))
+
+        store.selectedTrigger = .tap
+        store.assign(folder, to: ok)
+        XCTAssertNotEqual(store.action(for: ok.id)?.id, folder.id)
+
+        store.assign(typeless, to: ok)
+        XCTAssertNotEqual(store.action(for: ok.id)?.id, typeless.id)
+
+        store.selectedTrigger = .hold
+        store.assign(typeless, to: voice)
+        XCTAssertNil(store.action(for: voice.id, trigger: .hold))
+
+        store.selectedTrigger = .tap
+        store.assign(typeless, to: voice)
+        XCTAssertEqual(store.action(for: voice.id, trigger: .tap)?.id, typeless.id)
+
+        store.selectActionsRingSlot(0)
+        XCTAssertFalse(store.assignActionToActionsRing(actionID: typeless.id, at: 0))
+        XCTAssertTrue(store.assignActionToActionsRing(actionID: folder.id, at: 0))
+        XCTAssertEqual(store.actionsRingAction(at: 0, for: nil)?.id, folder.id)
+    }
+
+    @MainActor
+    func testLegacyInvalidSpecialAssignmentsAreIgnoredAtRuntime() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiCoding-SpecialEligibility-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configurationStore = LocalConfigurationStore(
+            fileURL: directory.appendingPathComponent("config.json")
+        )
+        try configurationStore.save(
+            PersistedConfiguration(
+                assignmentsByProfile: [
+                    "global": [
+                        "ok": "actions-ring-folder-work",
+                        "voice": "typeless-dictation"
+                    ]
+                ],
+                holdAssignmentsByProfile: ["global": ["voice": "typeless-dictation"]],
+                actionsRingActionIDs: [
+                    "typeless-dictation", "copy", "paste", "lock",
+                    "screenshot", "launch-finder", "launch-notes", "play-pause"
+                ]
+            )
+        )
+
+        let store = AppStore(
+            configurationStore: configurationStore,
+            runtimeServicesEnabled: false
+        )
+        XCTAssertNil(store.action(for: "ok", trigger: .tap))
+        XCTAssertEqual(store.action(for: "voice", trigger: .tap)?.id, "typeless-dictation")
+        XCTAssertNil(store.action(for: "voice", trigger: .hold))
+        XCTAssertNil(store.actionsRingAction(at: 0, for: nil))
+    }
+
+    @MainActor
+    func testSpecialActionsCannotBeSavedAsSmartActionSteps() {
+        for actionID in ["actions-ring-folder-work", "typeless-dictation"] {
+            let step = SmartActionStep.action(actionID)
+            XCTAssertTrue(step.isValid, "底层命令仍供专用运行时使用")
+            XCTAssertFalse(step.isValidForSmartAction)
+            XCTAssertNil(
+                SmartAction.restored(from: PersistedSmartAction(
+                    id: "invalid-\(actionID)",
+                    actionID: "custom-invalid-\(actionID)",
+                    title: "无效工作流",
+                    steps: [step]
+                ))
+            )
+
+            let store = makeIsolatedStore()
+            let workflow = SmartAction(
+                id: "invalid-\(actionID)",
+                actionID: "custom-invalid-\(actionID)",
+                title: "无效工作流",
+                subtitle: "1 个步骤",
+                symbol: "bolt",
+                tint: .purple,
+                stepCount: 1,
+                steps: [step],
+                triggers: [.device]
+            )
+            store.addSmartAction(workflow)
+            XCTAssertFalse(store.smartActions.contains(where: { $0.id == workflow.id }))
+        }
+    }
+
+    @MainActor
+    func testActionsRingParameterActionsMapToNativeControlsAndScrollEvents() async throws {
         let volume = try XCTUnwrap(
             RemoteAction.catalog.first(where: { $0.id == "volume-adjust" })
         )
@@ -2004,11 +2671,22 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(interaction.scrollSequence, 2)
         XCTAssertEqual(interaction.scrollDelta, -1)
 
-        let store = AppStore(runtimeServicesEnabled: false)
+        let executor = RecordingActionExecutor()
+        let coordinator = BackendCoordinator(executor: executor, keyRemapper: nil)
+        let store = makeIsolatedStore(backendCoordinator: coordinator)
         store.adjustActionsRingParameter(volume, by: 2)
+        try? await Task.sleep(for: .milliseconds(20))
         XCTAssertEqual(store.backendLog, "Actions Ring 已调节音量")
         store.adjustActionsRingParameter(brightness, by: -1)
+        try? await Task.sleep(for: .milliseconds(20))
         XCTAssertEqual(store.backendLog, "Actions Ring 已调节亮度")
+        XCTAssertEqual(
+            executor.commands,
+            [
+                .sequence([.system(.volumeUp), .system(.volumeUp)]),
+                .sequence([.system(.brightnessDown)])
+            ]
+        )
     }
 
     func testSelectedTextPromptBuilderTrimsClipsAndBuildsDestination() throws {
@@ -2506,6 +3184,33 @@ final class BackendModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testHardwareExecutionFailureIsRecordedInBackendLog() async {
+        let input = PreviewRemoteInputService()
+        let executor = RecordingActionExecutor(result: .failure("系统拒绝执行"))
+        let coordinator = BackendCoordinator(
+            inputService: input,
+            executor: executor,
+            keyRemapper: nil
+        )
+        coordinator.resolveActionID = { _, slotID, trigger in
+            slotID == "ok" && trigger == .tap ? "play-pause" : nil
+        }
+        var messages: [String] = []
+        coordinator.onLog = { messages.append($0) }
+
+        coordinator.start()
+        input.emit(slotID: "ok", phase: .began)
+        input.emit(slotID: "ok", phase: .ended)
+        try? await Task.sleep(for: .milliseconds(30))
+
+        XCTAssertEqual(executor.commands, [.system(.playPause)])
+        XCTAssertTrue(messages.contains {
+            $0 == "执行 ok.tap → play-pause 失败：系统拒绝执行"
+        })
+        coordinator.stop()
+    }
+
+    @MainActor
     func testRelayEventIsAuthoritativeWhenDirectHIDAlsoReportsTheSameKey() async {
         let input = PreviewRemoteInputService()
         let remapper = RecordingDeviceKeyRemapper()
@@ -2579,7 +3284,7 @@ final class BackendModelsTests: XCTestCase {
 
     @MainActor
     func testSettingsReturnsToTheOriginatingSection() {
-        let store = AppStore()
+        let store = makeIsolatedStore()
         store.selectSection(.automations)
         store.selectSection(.settings)
 
@@ -2592,7 +3297,7 @@ final class BackendModelsTests: XCTestCase {
 
     @MainActor
     func testLocalProfileModalDismissesForNavigationAndDeviceFlows() {
-        let store = AppStore()
+        let store = makeIsolatedStore()
 
         store.showLocalProfile()
         XCTAssertTrue(store.showsLocalProfile)
@@ -2613,7 +3318,7 @@ final class BackendModelsTests: XCTestCase {
 
     @MainActor
     func testExploreCenterRoutesToRealFeatureSurfaces() {
-        let store = AppStore()
+        let store = makeIsolatedStore()
 
         store.showExploreCenter()
         XCTAssertTrue(store.showsExploreCenter)
@@ -2728,6 +3433,87 @@ final class BackendModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testDisabledSmartActionDisappearsFromSavedActionsRingAndCannotRun() async {
+        let executor = RecordingActionExecutor()
+        let coordinator = BackendCoordinator(executor: executor, keyRemapper: nil)
+        let store = makeIsolatedStore(backendCoordinator: coordinator)
+        let workflow = SmartAction(
+            id: "ring-disable-test",
+            actionID: "custom-smart-ring-disable-test",
+            title: "动作环停用测试",
+            subtitle: "1 个步骤",
+            symbol: "calendar",
+            tint: .purple,
+            stepCount: 1,
+            steps: [.action("launch-calendar")],
+            triggers: [.actionsRing]
+        )
+        store.addSmartAction(workflow)
+        for index in store.actionsRingActionIDs.indices {
+            store.selectActionsRingSlot(index)
+            store.clearSelectedActionsRingSlot()
+        }
+        XCTAssertTrue(store.assignActionToActionsRing(actionID: workflow.actionID, at: 0))
+        XCTAssertEqual(store.actionsRingAction(at: 0, for: nil)?.id, workflow.actionID)
+
+        XCTAssertTrue(store.setSmartActionEnabled(id: workflow.id, enabled: false))
+        XCTAssertTrue(store.actionsRingActions.allSatisfy { $0 == nil })
+        XCTAssertNil(store.actionsRingAction(at: 0, for: nil))
+
+        store.runActionsRingAction(at: 0)
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(executor.commands.isEmpty)
+
+        store.showRuntimeActionsRing()
+        XCTAssertEqual(store.toastMessage, "请先为 Actions Ring 添加操作")
+    }
+
+    @MainActor
+    func testRemovingActionsRingTriggerInvalidatesSavedRingAssignment() async throws {
+        let executor = RecordingActionExecutor()
+        let coordinator = BackendCoordinator(executor: executor, keyRemapper: nil)
+        let store = makeIsolatedStore(backendCoordinator: coordinator)
+        let workflow = SmartAction(
+            id: "ring-trigger-test",
+            actionID: "custom-smart-ring-trigger-test",
+            title: "动作环触发测试",
+            subtitle: "1 个步骤",
+            symbol: "calendar",
+            tint: .purple,
+            stepCount: 1,
+            steps: [.action("launch-calendar")],
+            triggers: [.actionsRing]
+        )
+        store.addSmartAction(workflow)
+        XCTAssertTrue(store.assignActionToActionsRing(actionID: workflow.actionID, at: 0))
+
+        let deviceOnlyWorkflow = SmartAction(
+            id: workflow.id,
+            actionID: workflow.actionID,
+            title: workflow.title,
+            subtitle: workflow.subtitle,
+            symbol: workflow.symbol,
+            tint: workflow.tint,
+            stepCount: workflow.stepCount,
+            steps: workflow.steps,
+            triggers: [.device]
+        )
+        store.updateSmartAction(deviceOnlyWorkflow)
+
+        XCTAssertTrue(store.actionsRingSmartActionCatalog.isEmpty)
+        XCTAssertNil(store.actionsRingActions[0])
+        XCTAssertNil(store.actionsRingAction(at: 0, for: nil))
+        XCTAssertFalse(store.assignActionToActionsRing(actionID: workflow.actionID, at: 1))
+        store.runActionsRingAction(at: 0)
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(executor.commands.isEmpty)
+
+        let builtIn = try XCTUnwrap(RemoteAction.catalog.first(where: { $0.id == "copy" }))
+        XCTAssertTrue(store.assignActionToActionsRing(actionID: builtIn.id, at: 1))
+        XCTAssertEqual(store.actionsRingAction(at: 1, for: nil)?.id, builtIn.id)
+    }
+
+    @MainActor
     func testLegacyDefaultActionsRingMigratesToFunctionalReferenceActions() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MiCoding-ActionsRingMigration-\(UUID().uuidString)", isDirectory: true)
@@ -2764,7 +3550,7 @@ final class BackendModelsTests: XCTestCase {
 
     @MainActor
     func testActionsRingConfigurationCanRoundTripFromDeviceDrawer() {
-        let store = AppStore(runtimeServicesEnabled: false)
+        let store = makeIsolatedStore()
         store.openDevice(.remote2Pro)
         store.selectedSlotID = "left"
 
@@ -2915,18 +3701,10 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(HomeDeviceCardMetrics.connectedProductOpacity, 1, accuracy: 0.001)
         XCTAssertEqual(HomeDeviceCardMetrics.unavailableProductOpacity, 0.4, accuracy: 0.001)
         XCTAssertEqual(HomeDeviceCardMetrics.productFrameHeight, 228, accuracy: 0.001)
-        XCTAssertEqual(HomeDeviceCardMetrics.idleProductOffsetY, 19, accuracy: 0.001)
-        XCTAssertEqual(HomeDeviceCardMetrics.hoveredProductOffsetY, 7, accuracy: 0.001)
+        XCTAssertEqual(HomeDeviceCardMetrics.productOffsetY, 19, accuracy: 0.001)
         XCTAssertLessThan(
             HomeDeviceCardMetrics.unavailableProductOpacity,
             HomeDeviceCardMetrics.connectedProductOpacity
-        )
-        XCTAssertEqual(
-            HomeDeviceCardMetrics.idleProductOffsetY
-                - HomeDeviceCardMetrics.hoveredProductOffsetY,
-            12,
-            accuracy: 0.001,
-            "Options+ hover 只把产品向上移动 12 pt"
         )
         XCTAssertEqual(BatteryConnectionStatusMetrics.compactControlWidth, 54)
         XCTAssertEqual(BatteryConnectionStatusMetrics.reportedControlWidth, 103)
@@ -2935,6 +3713,30 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(BatteryConnectionStatusMetrics.reportedValueSpacing, 6.5)
         XCTAssertEqual(BatteryConnectionStatusMetrics.iconSlotWidth, 26)
         XCTAssertEqual(BatteryConnectionStatusMetrics.cornerRadius, 4)
+    }
+
+    func testHomeUnavailableDevicePresentationCoversDisabledConnectingAndDisconnectedStates() {
+        XCTAssertEqual(
+            HomeUnavailableDevicePresentation.actionTitle(
+                connectionState: .connected,
+                inputServiceEnabled: false
+            ),
+            "启用"
+        )
+        XCTAssertEqual(
+            HomeUnavailableDevicePresentation.actionTitle(
+                connectionState: .connecting,
+                inputServiceEnabled: true
+            ),
+            "正在连接"
+        )
+        XCTAssertEqual(
+            HomeUnavailableDevicePresentation.actionTitle(
+                connectionState: .disconnected,
+                inputServiceEnabled: true
+            ),
+            "蓝牙设置"
+        )
     }
 
     func testHomeGreetingMatchesReferenceDayParts() {
@@ -2973,14 +3775,140 @@ final class BackendModelsTests: XCTestCase {
 
         let executor = SystemActionExecutor()
         defer { withExtendedLifetime(executor) {} }
-        executor.execute(.showActionsRing)
+        let result = await executor.execute(.showActionsRing)
 
+        XCTAssertEqual(result, .success)
         await fulfillment(of: [expectation], timeout: 1)
     }
 
     @MainActor
+    func testSystemExecutorReportsMissingApplication() async {
+        let bundleIdentifier = "io.micoding.missing-\(UUID().uuidString)"
+        let result = await SystemActionExecutor().execute(
+            .openApplication(bundleIdentifier: bundleIdentifier)
+        )
+
+        guard case let .failure(message) = result else {
+            return XCTFail("缺失应用不应被报告为成功")
+        }
+        XCTAssertTrue(message.contains("未找到应用"))
+        XCTAssertTrue(message.contains(bundleIdentifier))
+    }
+
+    @MainActor
+    func testSystemExecutorReportsInvalidURL() async {
+        let result = await SystemActionExecutor().execute(.openURL("not a web URL"))
+
+        guard case let .failure(message) = result else {
+            return XCTFail("非法 URL 不应被报告为成功")
+        }
+        XCTAssertTrue(message.contains("网址无效"))
+    }
+
+    @MainActor
+    func testSystemExecutorSequenceStopsAtFirstFailure() async {
+        let shouldNotRun = expectation(description: "失败后的动作不应执行")
+        shouldNotRun.isInverted = true
+        let token = NotificationCenter.default.addObserver(
+            forName: .showActionsRingRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            shouldNotRun.fulfill()
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        let result = await SystemActionExecutor().execute(
+            .sequence([.openURL("invalid"), .showActionsRing])
+        )
+
+        guard case let .failure(message) = result else {
+            return XCTFail("包含失败步骤的序列不应成功")
+        }
+        XCTAssertTrue(message.contains("第 1 步失败"))
+        await fulfillment(of: [shouldNotRun], timeout: 0.05)
+    }
+
+    @MainActor
+    func testBackendCoordinatorLogsExecutorFailure() async {
+        let executor = RecordingActionExecutor(result: .failure("注入执行失败"))
+        let coordinator = BackendCoordinator(executor: executor, keyRemapper: nil)
+        var messages: [String] = []
+        coordinator.onLog = { messages.append($0) }
+
+        let result = await coordinator.execute(actionID: "copy", source: "硬件触发")
+
+        XCTAssertEqual(result, .failure("注入执行失败"))
+        XCTAssertEqual(executor.commands, [.keyStroke(keyCode: 8, flags: UInt64(1 << 20))])
+        XCTAssertEqual(messages.last, "硬件触发 → copy 失败：注入执行失败")
+    }
+
+    @MainActor
+    func testManualRunOnlyShowsSuccessAfterExecutorSucceeds() async {
+        let executor = RecordingActionExecutor()
+        let coordinator = BackendCoordinator(executor: executor, keyRemapper: nil)
+        let store = makeIsolatedStore(backendCoordinator: coordinator)
+
+        let result: ActionExecutionResult = await withCheckedContinuation { continuation in
+            store.runAction(actionID: "copy", title: "复制") {
+                continuation.resume(returning: $0)
+            }
+        }
+
+        XCTAssertEqual(result, .success)
+        XCTAssertEqual(store.toastMessage, "已运行“复制”")
+    }
+
+    @MainActor
+    func testManualRunShowsExplicitExecutorFailureInsteadOfSuccess() async {
+        let executor = RecordingActionExecutor(result: .failure("未找到目标应用"))
+        let coordinator = BackendCoordinator(executor: executor, keyRemapper: nil)
+        let store = makeIsolatedStore(backendCoordinator: coordinator)
+        store.showActionNotifications = false
+
+        let result: ActionExecutionResult = await withCheckedContinuation { continuation in
+            store.runAction(actionID: "copy", title: "复制") {
+                continuation.resume(returning: $0)
+            }
+        }
+
+        XCTAssertEqual(result, .failure("未找到目标应用"))
+        XCTAssertEqual(store.toastMessage, "无法运行“复制”：未找到目标应用")
+        XCTAssertFalse(store.toastMessage?.contains("已运行") == true)
+    }
+
+    func testActionRunFeedbackShowsSuccessOnlyAfterSuccessfulCompletion() {
+        var feedback = ActionRunFeedbackState()
+
+        XCTAssertTrue(feedback.begin())
+        XCTAssertTrue(feedback.isRunning)
+        XCTAssertFalse(feedback.didSucceed)
+        feedback.complete(with: .success)
+
+        XCTAssertFalse(feedback.isRunning)
+        XCTAssertTrue(feedback.didSucceed)
+        XCTAssertFalse(feedback.canRun)
+
+        feedback.reset()
+        XCTAssertEqual(feedback.phase, .idle)
+        XCTAssertTrue(feedback.canRun)
+    }
+
+    func testActionRunFeedbackReturnsToIdleAfterFailure() {
+        var feedback = ActionRunFeedbackState()
+
+        XCTAssertTrue(feedback.begin())
+        XCTAssertFalse(feedback.begin(), "运行中不应接受重复点击")
+        feedback.complete(with: .failure("注入失败"))
+
+        XCTAssertEqual(feedback.phase, .idle)
+        XCTAssertFalse(feedback.didSucceed)
+        XCTAssertTrue(feedback.canRun)
+    }
+
+    @MainActor
     func testAddDeviceFlowEntersAndLeavesConnectionPicker() {
-        let store = AppStore(runtimeServicesEnabled: false)
+        let store = makeIsolatedStore()
         store.openDevice(.remote2Pro)
 
         store.beginAddingDevice()
@@ -2997,7 +3925,10 @@ final class BackendModelsTests: XCTestCase {
         store.connectWithBluetooth()
 
         XCTAssertTrue(store.showsConnectionTypePicker)
+        store.finishAddingDevice()
+        XCTAssertFalse(store.showsConnectionTypePicker)
 
+        store.beginAddingDevice()
         store.selectSection(.settings)
 
         XCTAssertFalse(store.showsConnectionTypePicker)
@@ -3066,7 +3997,7 @@ final class BackendModelsTests: XCTestCase {
 
     @MainActor
     func testDisconnectedDeviceCanBeOpenedForOfflineConfiguration() {
-        let store = AppStore()
+        let store = makeIsolatedStore()
         store.connectionState = .disconnected
 
         store.openDevice(.remote2Pro)
@@ -3145,9 +4076,15 @@ final class BackendModelsTests: XCTestCase {
 @MainActor
 private final class RecordingActionExecutor: ActionExecuting {
     private(set) var commands: [ActionCommand] = []
+    var result: ActionExecutionResult
 
-    func execute(_ command: ActionCommand) {
+    init(result: ActionExecutionResult = .success) {
+        self.result = result
+    }
+
+    func execute(_ command: ActionCommand) async -> ActionExecutionResult {
         commands.append(command)
+        return result
     }
 }
 
