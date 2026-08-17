@@ -598,13 +598,36 @@ struct InlineDeviceStatus: View {
     }
 }
 
+enum ToastTone: Equatable {
+    case info
+    case warning
+    case error
+
+    var symbol: String {
+        switch self {
+        case .info: "info"
+        case .warning: "triangle-alert"
+        case .error: "circle-x"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .info: AppTheme.purple
+        case .warning: AppTheme.warning
+        case .error: AppTheme.batteryEmpty
+        }
+    }
+}
+
 struct ToastView: View {
     let message: String
+    var tone: ToastTone = .info
 
     var body: some View {
         HStack(spacing: 9) {
-            AppIcon(symbol: "checkmark.circle.fill", size: AppIconSize.row)
-                .foregroundStyle(AppTheme.success)
+            AppIcon(symbol: tone.symbol, size: AppIconSize.row)
+                .foregroundStyle(tone.color)
             Text(message)
                 .font(AppTypography.bodyMedium)
         }

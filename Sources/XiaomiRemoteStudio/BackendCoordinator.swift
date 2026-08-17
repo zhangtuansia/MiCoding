@@ -3,6 +3,15 @@ import os
 
 private let backendLogger = Logger(subsystem: "io.xiaomiremote.studio", category: "Backend")
 
+enum BackendInputStartResult: Equatable {
+    case started
+    case alreadyRunning
+    case inactive
+    case deviceNotManaged
+    case permissionRequired
+    case failed(String)
+}
+
 @MainActor
 final class BackendCoordinator {
     var resolveActionID: ((String?, String, RemoteTrigger) -> String?)?
@@ -12,6 +21,7 @@ final class BackendCoordinator {
     var onUnknownUsage: ((UInt32, Bool) -> Void)?
     var onConnectionChanged: ((Bool) -> Void)?
     var onLog: ((String) -> Void)?
+    var onAutomaticExecutionResult: ((String, ActionExecutionResult) -> Void)?
 
     private let inputService: RemoteInputServicing
     private let gestureEngine: RemoteGestureEngine
@@ -56,16 +66,19 @@ final class BackendCoordinator {
         self.applicationTriggerBindings = applicationTriggerBindings
     }
 
-    func start() {
+    @discardableResult
+    func start() -> BackendInputStartResult {
         startAutomationTriggers()
-        guard !inputStarted else { return }
+        guard !inputStarted else { return .alreadyRunning }
         do {
             try inputService.start()
             inputStarted = true
             onLog?("HID 监听器已启动，等待 Xiaomi Remote 2 Pro")
+            return .started
         } catch {
             onConnectionChanged?(false)
             onLog?(error.localizedDescription)
+            return .failed(error.localizedDescription)
         }
     }
 
@@ -139,7 +152,7 @@ final class BackendCoordinator {
     private func wireServices() {
         shortcutMonitor.onTrigger = { [weak self] actionID in
             Task { @MainActor [weak self] in
-                await self?.execute(actionID: actionID, source: "快捷键触发器")
+                await self?.executeAutomatically(actionID: actionID, source: "快捷键触发器")
             }
         }
         keyRemapper?.onLog = { [weak self] message in
@@ -220,7 +233,7 @@ final class BackendCoordinator {
                 }
                 self.lastApplicationTriggerDates[actionID] = now
                 Task { @MainActor [weak self] in
-                    await self?.execute(actionID: actionID, source: "应用触发器")
+                    await self?.executeAutomatically(actionID: actionID, source: "应用触发器")
                 }
             }
         }
@@ -246,12 +259,17 @@ final class BackendCoordinator {
                 return
             }
             Task { @MainActor [weak self] in
-                await self?.execute(
+                await self?.executeAutomatically(
                     actionID: actionID,
                     source: "执行 \(resolved.slotID).\(resolved.trigger.rawValue)"
                 )
             }
         }
+    }
+
+    private func executeAutomatically(actionID: String, source: String) async {
+        let result = await execute(actionID: actionID, source: source)
+        onAutomaticExecutionResult?(actionID, result)
     }
 
     private func routeInputEvent(_ event: RemoteInputEvent) {

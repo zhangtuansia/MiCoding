@@ -46,7 +46,7 @@ struct AppShellView: View {
             }
 
             if let toastMessage = store.toastMessage {
-                ToastView(message: toastMessage)
+                ToastView(message: toastMessage, tone: store.toastTone)
                     .padding(.top, 18)
                     .transition(.opacity)
                     .zIndex(20)
@@ -131,6 +131,10 @@ struct AppShellView: View {
             store.showRuntimeActionsRing()
         }
         .onDisappear { store.stopBackend() }
+        // Read the published appearance preference inside the live SwiftUI
+        // hierarchy. Applying this only once while constructing NSHostingView
+        // made theme changes appear after relaunch instead of immediately.
+        .preferredColorScheme(store.preferredColorScheme)
     }
 
     @ViewBuilder
@@ -338,11 +342,12 @@ private struct LocalProfileModal: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
     @State private var showsProfileActions = false
+    @State private var pendingBackupData: Data?
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                Text("帐户")
+                Text("本地配置")
                     .font(.system(size: 20, weight: .bold))
                     .tracking(0.75)
 
@@ -399,13 +404,13 @@ private struct LocalProfileModal: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(QuietButtonStyle())
-            .accessibilityLabel("关闭帐户")
+            .accessibilityLabel("关闭本地配置")
             .padding(.top, 16)
             .padding(.trailing, 20)
         }
         .shadow(color: .black.opacity(colorScheme == .dark ? 0.38 : 0.22), radius: 24, y: 12)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("帐户与本地配置")
+        .accessibilityLabel("本地配置与备份")
         .confirmationDialog(
             "管理本地配置",
             isPresented: $showsProfileActions,
@@ -416,6 +421,21 @@ private struct LocalProfileModal: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("配置仅保存在这台 Mac。")
+        }
+        .confirmationDialog(
+            "恢复此备份？",
+            isPresented: Binding(
+                get: { pendingBackupData != nil },
+                set: { if !$0 { pendingBackupData = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("恢复并覆盖当前配置", role: .destructive) {
+                restorePendingLocalProfile()
+            }
+            Button("取消", role: .cancel) { pendingBackupData = nil }
+        } message: {
+            Text("当前本地配置会被备份内容替换。")
         }
     }
 
@@ -432,7 +452,7 @@ private struct LocalProfileModal: View {
             store.dismissLocalProfile()
             store.showToast("本地配置已导出")
         } catch {
-            store.showToast("导出失败：\(error.localizedDescription)")
+            store.showImportantToast("导出失败：\(error.localizedDescription)")
         }
     }
 
@@ -445,11 +465,21 @@ private struct LocalProfileModal: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         do {
-            try store.restoreDeviceBackupData(Data(contentsOf: url))
+            pendingBackupData = try Data(contentsOf: url)
+        } catch {
+            store.showImportantToast("导入失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func restorePendingLocalProfile() {
+        guard let data = pendingBackupData else { return }
+        pendingBackupData = nil
+        do {
+            try store.restoreDeviceBackupData(data)
             store.dismissLocalProfile()
             store.showToast("本地配置已恢复")
         } catch {
-            store.showToast("导入失败：\(error.localizedDescription)")
+            store.showImportantToast("导入失败：\(error.localizedDescription)")
         }
     }
 }

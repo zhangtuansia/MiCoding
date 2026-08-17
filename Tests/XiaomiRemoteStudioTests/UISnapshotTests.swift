@@ -647,6 +647,12 @@ final class UISnapshotTests: XCTestCase {
             name: "settings-privacy",
             into: directory
         )
+        try render(
+            view: SettingsView(initialSelection: .feedback),
+            store: lightStore,
+            name: "settings-feedback",
+            into: directory
+        )
 
         let settingsPermissionRequiredStore = makeSnapshotStore()
         settingsPermissionRequiredStore.appearanceMode = .light
@@ -731,6 +737,30 @@ final class UISnapshotTests: XCTestCase {
         )
         darkStore.searchText = ""
         try render(view: SettingsView(), store: darkStore, name: "settings-general-dark", into: directory)
+        try render(
+            view: SettingsView(initialSelection: .services),
+            store: darkStore,
+            name: "settings-services-dark",
+            into: directory
+        )
+        try render(
+            view: SettingsView(initialSelection: .notifications),
+            store: darkStore,
+            name: "settings-notifications-dark",
+            into: directory
+        )
+        try render(
+            view: SettingsView(initialSelection: .privacy),
+            store: darkStore,
+            name: "settings-privacy-dark",
+            into: directory
+        )
+        try render(
+            view: SettingsView(initialSelection: .feedback),
+            store: darkStore,
+            name: "settings-feedback-dark",
+            into: directory
+        )
     }
 
     @MainActor

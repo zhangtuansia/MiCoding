@@ -34,7 +34,10 @@
 | 设备信息 | macOS 已上报电量 / 暂未上报 | 显示真实百分比；只有系统暂未提供字段时才显示“设备未上报” | `device-information` |
 | 特性概览 | 实体按键测试 / 固件未知键值 | 逐键点亮 13 个目标；未映射键不会静默丢失，而会显示原始 HID Usage 与检测时间 | `feature-overview-key-test`、`feature-overview-key-test-unknown` |
 | 权限 | 输入监控或辅助功能未授予 | 在“隐私与数据”分项显示权限状态和系统设置入口 | `settings-privacy-required` |
-| 通用设置 | 检查更新 / 语言 | 更新按钮和自动检查开关读取 GitHub Releases 并显示明确状态；当前仅支持简体中文时使用只读选中卡，不伪装成可操作下拉菜单 | `settings-general`、`settings-general-dark` |
+| 通用设置 | 检查更新 / 语言 | 更新按钮和自动检查开关读取 GitHub Releases 并显示明确状态；当前仅支持简体中文时显示只读状态文本，不伪装成可操作下拉菜单 | `settings-general`、`settings-general-dark` |
+| MiCoding 服务 | 启动 / 权限 / 无设备 / 启动失败 | 状态灯和文案反映真实监听结果；未管理设备时进入添加流程，启动失败不报成功 | `settings-services`、`settings-services-dark` |
+| 屏幕提示 | 操作 / 低电量 / 权限 / 连接 | 明确说明反馈仅显示在 MiCoding 窗口内；普通成功可关闭，执行失败始终保留错误提示 | `settings-notifications`、`settings-notifications-dark` |
+| 隐私与诊断 | 本地数据 / 权限 / 蓝牙报告 | 数据目录、系统权限和 GitHub 帮助均有真实入口；诊断报告只导出白名单状态和未知 HID Usage，不包含按键内容或原始日志 | `settings-privacy`、`settings-feedback`、对应深色快照 |
 | Actions Ring 设置 | 支持入口 | 打开应用内四步使用说明，可直接进入动作环编辑器 | `actions-ring-support` |
 
 MiCoding 只服务 Xiaomi Bluetooth Remote 2 Pro。设备离线时仍允许预先配置；用户主动从 MiCoding 移除后才显示空设备状态，并可从“添加设备”恢复。

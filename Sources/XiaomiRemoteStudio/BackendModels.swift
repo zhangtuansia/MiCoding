@@ -70,6 +70,15 @@ enum AppAppearanceMode: String, CaseIterable, Codable, Equatable, Identifiable, 
     }
 }
 
+/// MiCoding currently ships one complete interface language. Keeping this as
+/// an explicit capability prevents Settings from presenting a language picker
+/// that cannot change the rest of the application.
+enum InterfaceLanguageSupport {
+    static let languageCode = "zh-Hans"
+    static let displayName = "简体中文"
+    static let availabilityDescription = "当前版本支持的显示语言"
+}
+
 enum ActionsRingSize: String, CaseIterable, Codable, Equatable, Identifiable, Sendable {
     case small
     case medium
@@ -586,6 +595,7 @@ enum DeviceConfigurationBackupError: LocalizedError, Equatable {
     case unsupportedVersion(Int)
     case unsupportedConfigurationVersion(Int)
     case incompatibleDevice(String)
+    case couldNotSave(String)
 
     var errorDescription: String? {
         switch self {
@@ -595,6 +605,8 @@ enum DeviceConfigurationBackupError: LocalizedError, Equatable {
             "此备份包含不受支持的配置版本 \(version)"
         case let .incompatibleDevice(deviceID):
             "此备份属于其他设备（\(deviceID)）"
+        case let .couldNotSave(message):
+            "无法保存恢复后的配置：\(message)"
         }
     }
 }

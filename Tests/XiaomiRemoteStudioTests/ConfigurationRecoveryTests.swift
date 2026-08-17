@@ -107,4 +107,45 @@ final class ConfigurationRecoveryTests: XCTestCase {
         XCTAssertTrue(store.backendLog.contains("保存本地配置失败"))
         XCTAssertEqual(store.toastMessage, "无法保存设置，请检查 MiCoding 的本地数据目录")
     }
+
+    @MainActor
+    func testBackupRestoreSaveFailureLeavesLiveConfigurationUntouched() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiCoding-TransactionalRestore-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let sourceStore = AppStore(
+            configurationStore: LocalConfigurationStore(
+                fileURL: root.appendingPathComponent("source/config.json")
+            ),
+            runtimeServicesEnabled: false
+        )
+        let okSlot = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "ok" }))
+        let copy = try XCTUnwrap(RemoteAction.catalog.first(where: { $0.id == "copy" }))
+        sourceStore.selectSlot(okSlot)
+        sourceStore.assign(copy, to: okSlot)
+        let backupData = try sourceStore.makeDeviceBackupData()
+
+        let parentFile = root.appendingPathComponent("not-a-directory")
+        try Data("file blocks child writes".utf8).write(to: parentFile)
+        let destinationStore = AppStore(
+            configurationStore: LocalConfigurationStore(
+                fileURL: parentFile.appendingPathComponent("config.json")
+            ),
+            runtimeServicesEnabled: false
+        )
+        let actionBeforeRestore = destinationStore.action(for: okSlot.id)?.id
+        let before = try destinationStore.makeDeviceBackupData(exportedAt: .distantPast)
+
+        XCTAssertThrowsError(try destinationStore.restoreDeviceBackupData(backupData)) { error in
+            guard case .couldNotSave = error as? DeviceConfigurationBackupError else {
+                return XCTFail("恢复写入失败应返回 couldNotSave，实际为 \(error)")
+            }
+        }
+
+        XCTAssertEqual(destinationStore.action(for: okSlot.id)?.id, actionBeforeRestore)
+        let after = try destinationStore.makeDeviceBackupData(exportedAt: .distantPast)
+        XCTAssertEqual(before, after, "磁盘写入失败不得部分覆盖内存中的当前配置")
+    }
 }

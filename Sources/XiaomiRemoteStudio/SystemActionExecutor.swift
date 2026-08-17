@@ -502,13 +502,13 @@ final class SystemActionExecutor: ActionExecuting {
             return .failure("未获得辅助功能权限，无法读取所选文本")
         }
         guard let selection = await copySelectedText() else {
-            return openDefaultBrowser()
+            return .failure("未读取到所选文本，请先在当前应用中选择内容")
         }
 
         var components = URLComponents(string: "https://www.google.com/search")
         components?.queryItems = [URLQueryItem(name: "q", value: selection)]
         guard let value = components?.url?.absoluteString else {
-            return openDefaultBrowser()
+            return .failure("无法为所选文本生成搜索网址")
         }
         return openURL(value)
     }
@@ -525,7 +525,7 @@ final class SystemActionExecutor: ActionExecuting {
                 instruction: instruction,
                 selection: selection
               ) else {
-            return openURL(url)
+            return .failure("未读取到所选文本，请先在当前应用中选择内容")
         }
 
         // Keep the composed prompt on the pasteboard as a reliable fallback.
@@ -561,7 +561,7 @@ final class SystemActionExecutor: ActionExecuting {
             baseURL: url,
             prompt: prompt
         ) else {
-            return openURL(url)
+            return .failure("无法为所选文本生成 AI 提示词网址")
         }
         return NSWorkspace.shared.open(destination)
             ? .success

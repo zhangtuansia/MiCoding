@@ -233,7 +233,6 @@ final class MiCodingApplicationDelegate: NSObject, NSApplicationDelegate {
         let rootView = AppShellView()
             .environmentObject(store)
             .frame(minWidth: contentSize.width, minHeight: contentSize.height)
-            .preferredColorScheme(store.preferredColorScheme)
 
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: contentSize),

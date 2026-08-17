@@ -973,6 +973,7 @@ private struct SmartActionCard: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
     @State private var runFeedback = ActionRunFeedbackState()
+    @State private var confirmsDelete = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -992,7 +993,7 @@ private struct SmartActionCard: View {
                             Button("重命名和编辑", action: edit)
                             Button("创建副本", action: duplicate)
                             Button("导出", action: export)
-                            Button("删除", role: .destructive, action: delete)
+                            Button("删除", role: .destructive) { confirmsDelete = true }
                         } else {
                             Button("导出", action: export)
                         }
@@ -1173,11 +1174,21 @@ private struct SmartActionCard: View {
                     Button("重命名和编辑", action: edit)
                     Button("创建副本", action: duplicate)
                     Button("导出", action: export)
-                    Button("删除", role: .destructive, action: delete)
+                    Button("删除", role: .destructive) { confirmsDelete = true }
                 } else {
                     Button("导出", action: export)
                 }
             }
+        }
+        .confirmationDialog(
+            "删除“\(action.title)”？",
+            isPresented: $confirmsDelete,
+            titleVisibility: .visible
+        ) {
+            Button("删除 Smart Action", role: .destructive, action: delete)
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("它会从遥控器按键和 Actions Ring 中移除，且无法撤销。")
         }
     }
 
@@ -1618,11 +1629,6 @@ struct SmartActionEditorView: View {
                     triggers.append(.device)
                     showsTriggerMenu = false
                 }
-                // Keep the category rail structurally identical to Options+.
-                // These triggers depend on Logitech-specific host services,
-                // so expose them honestly as unavailable instead of silently
-                // removing two rows and shrinking the menu.
-                workflowMenuRow(symbol: "calculator", title: "控制台", enabled: false) {}
                 workflowMenuRow(
                     symbol: "circle-dot",
                     title: "Actions Ring",
@@ -1631,7 +1637,6 @@ struct SmartActionEditorView: View {
                     triggers.append(.actionsRing)
                     showsTriggerMenu = false
                 }
-                workflowMenuRow(symbol: "gearshape", title: "系统", enabled: false) {}
                 workflowMenuRow(symbol: "keyboard", title: "快捷键", enabled: true) {
                     triggers.append(
                         .shortcut(
@@ -2016,7 +2021,6 @@ struct SmartActionEditorView: View {
             workflowMenuRow(symbol: "text-cursor-input", title: "文本", enabled: true) {
                 append(.text(""), configure: true)
             }
-            workflowMenuRow(symbol: "bell-ring", title: "触觉反馈", enabled: false) {}
             workflowMenuRow(symbol: "gearshape", title: "系统", enabled: true) {
                 showsSystemActions = true
             }
@@ -2082,7 +2086,7 @@ struct SmartActionEditorView: View {
     private var editorFooter: some View {
         HStack(alignment: .bottom, spacing: 12) {
             Button {
-                guard let url = URL(string: "https://github.com/zhangtuansia/MiCoding#当前版本") else { return }
+                guard let url = URL(string: "https://github.com/zhangtuansia/MiCoding#主要功能") else { return }
                 NSWorkspace.shared.open(url)
             } label: {
                 HStack(spacing: 8) {
@@ -3448,6 +3452,9 @@ struct SettingsView: View {
 
         case .privacy:
             PrivacySettingsContent()
+
+        case .feedback:
+            FeedbackSettingsContent(appVersion: appVersion)
         }
     }
 
@@ -3463,6 +3470,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case services
     case notifications
     case privacy
+    case feedback
 
     var id: String { rawValue }
 
@@ -3470,8 +3478,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general: "通用"
         case .services: "MiCoding 服务"
-        case .notifications: "通知"
+        case .notifications: "屏幕提示"
         case .privacy: "隐私与数据"
+        case .feedback: "反馈与诊断"
         }
     }
 
@@ -3506,7 +3515,7 @@ private struct GeneralSettingsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("常规设置")
+            Text("通用")
                 .font(AppTypography.pageTitle)
                 .settingsPageTitleOpticalBounds()
                 .offset(y: SettingsLayoutMetrics.pageTitleOpticalYOffset)
@@ -3527,8 +3536,8 @@ private struct GeneralSettingsContent: View {
 
                     Button(
                         store.softwareUpdateStatus.releaseURL == nil
-                            ? "查看发布说明"
-                            : "下载更新"
+                            ? "打开发布页"
+                            : "下载新版本"
                     ) {
                         store.openUpdatePage()
                     }
@@ -3548,72 +3557,49 @@ private struct GeneralSettingsContent: View {
             .padding(.top, 30)
             .offset(y: -5)
 
-            HStack {
-                Text("自动安装软件更新")
-                    .font(AppTypography.title)
-                    .settingsSectionTitleOpticalBounds()
+            HStack(alignment: .center, spacing: 20) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("自动检查更新")
+                        .font(AppTypography.title)
+                        .settingsSectionTitleOpticalBounds()
+                    Text("启动 MiCoding 时检查 GitHub 上的新版本；安装仍由你确认。")
+                        .font(AppTypography.supporting)
+                        .foregroundStyle(Color.primary.opacity(0.68))
+                }
                 Spacer()
                 CompactSettingsToggle(isOn: Binding(
                     get: { store.automaticUpdatesEnabled },
                     set: { store.setAutomaticUpdates($0) }
-                ), accessibilityLabel: "自动安装软件更新")
+                ), accessibilityLabel: "自动检查更新")
             }
             .frame(width: 555)
-            .padding(.top, 26)
-            .offset(y: -1.5)
+            .padding(.top, 28)
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("语言")
+                Text("界面语言")
                     .font(AppTypography.title)
                     .settingsSectionTitleOpticalBounds()
-                    .offset(y: -1)
 
-                Menu {
-                    Button {} label: {
-                        Label("使用系统语言", systemImage: "checkmark")
-                    }
-                    .disabled(true)
+                HStack(spacing: 16) {
+                    Text(InterfaceLanguageSupport.availabilityDescription)
+                        .font(AppTypography.body)
+                        .foregroundStyle(Color.primary.opacity(0.68))
 
-                    Divider()
+                    Spacer()
 
-                    Button("打开语言与地区设置…") {
-                        store.openLanguageSettings()
-                    }
-                } label: {
-                    Color.clear
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 235, height: 48)
-                .overlay(alignment: .leading) {
-                    Text("使用系统语言")
+                    Text(InterfaceLanguageSupport.displayName)
                         .font(AppTypography.bodyMedium)
-                        .foregroundStyle(Color.primary)
-                        .padding(.leading, 22)
-                        .allowsHitTesting(false)
+                        .foregroundStyle(Color.primary.opacity(0.86))
                 }
-                .overlay(alignment: .trailing) {
-                    AppIcon(symbol: "chevron.down", size: AppIconSize.indicator)
-                        .foregroundStyle(Color.primary)
-                        .padding(.trailing, 18)
-                        .allowsHitTesting(false)
-                }
-                .background(AppTheme.primarySurface(for: colorScheme))
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .stroke(AppTheme.controlBorder(for: colorScheme), lineWidth: 1)
-                }
-                .offset(x: -20.5, y: 0.5)
-                .padding(.top, 11)
-                .help("使用 macOS 系统语言；当前显示为简体中文")
-                .accessibilityLabel("使用系统语言")
+                .frame(width: 555)
+                .padding(.top, 10)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("界面语言，简体中文，当前版本唯一支持的显示语言")
             }
-            .padding(.top, 42)
-            .offset(y: -2.5)
+            .padding(.top, 36)
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("颜色主题")
+                Text("外观")
                     .font(AppTypography.title)
                     // Unlike the compact row headings, Options+ gives this
                     // 22.875 pt line box its full painted height. Keeping the
@@ -3639,7 +3625,7 @@ private struct GeneralSettingsContent: View {
                 }
                 .padding(.top, 14.25)
             }
-            .padding(.top, 47)
+            .padding(.top, 42)
         }
     }
 
@@ -3659,7 +3645,7 @@ private struct FeedbackSettingsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("反馈与支持")
+            Text("反馈与诊断")
                 .font(AppTypography.pageTitle)
                 .settingsPageTitleOpticalBounds()
                 .offset(y: SettingsLayoutMetrics.pageTitleOpticalYOffset)
@@ -3673,9 +3659,9 @@ private struct FeedbackSettingsContent: View {
             .padding(.top, 28.5)
 
             SettingsEditorialSection(
-                title: "为您的使用体验评分",
-                description: "请花些时间评价一下您对本软件的使用体验。",
-                actionTitle: "立即评分",
+                title: "在 GitHub 关注项目",
+                description: "查看源码、版本记录，或为 MiCoding 点一个 Star。",
+                actionTitle: "打开 GitHub 项目",
                 action: { openGitHub(path: "") }
             )
             .padding(.top, 26.5)
@@ -3694,14 +3680,14 @@ private struct FeedbackSettingsContent: View {
                     .settingsSectionTitleOpticalBounds()
                     .offset(y: -4)
 
-                Text("如果遥控器遇到蓝牙连接问题，请勾选症状并导出报告。报告只包含 MiCoding 版本、权限状态、连接状态和本次运行日志。")
+                Text("如果遥控器遇到蓝牙连接问题，请勾选症状并导出报告。报告只包含 MiCoding 版本、权限状态、连接状态和服务状态，不包含按键内容。")
                     .font(AppTypography.body)
                     .foregroundStyle(Color.primary.opacity(0.72))
                     .lineSpacing(1)
                     .padding(.top, 12)
                     .offset(y: 5.5)
 
-                Button("查看连接说明") { openGitHub(path: "#运行") }
+                Button("查看连接说明") { openGitHub(path: "#安装与运行") }
                     .buttonStyle(SettingsTextLinkStyle())
                     .padding(.top, 8)
                     .offset(y: -5)
@@ -3750,7 +3736,9 @@ private struct FeedbackSettingsContent: View {
 
     private func openGitHub(path: String) {
         guard let url = URL(string: "https://github.com/zhangtuansia/MiCoding\(path)") else { return }
-        NSWorkspace.shared.open(url)
+        if !NSWorkspace.shared.open(url) {
+            store.showImportantToast("无法打开 GitHub")
+        }
     }
 
     private func exportBluetoothReport() {
@@ -3762,7 +3750,10 @@ private struct FeedbackSettingsContent: View {
         Device: \(store.deviceConnectionDetail)
         Input Monitoring: \(store.permissions.inputMonitoringGranted ? "granted" : "not granted")
         Accessibility: \(store.permissions.accessibilityGranted ? "granted" : "not granted")
-        Backend: \(store.backendLog)
+        Input Service Enabled: \(store.inputServiceEnabled ? "yes" : "no")
+        Input Backend Ready: \(store.inputBackendReady ? "yes" : "no")
+        Unknown HID Usage Count: \(store.unknownPhysicalUsages.count)
+        Unknown HID Usages: \(formattedUnknownUsages)
         """
 
         let panel = NSSavePanel()
@@ -3775,6 +3766,14 @@ private struct FeedbackSettingsContent: View {
         } catch {
             store.showImportantToast("导出失败：\(error.localizedDescription)")
         }
+    }
+
+    private var formattedUnknownUsages: String {
+        guard !store.unknownPhysicalUsages.isEmpty else { return "none" }
+        return store.unknownPhysicalUsages
+            .sorted()
+            .map { String(format: "0x%02X", $0) }
+            .joined(separator: ", ")
     }
 }
 
@@ -3820,6 +3819,23 @@ private struct ServiceSettingsContent: View {
                 .settingsSectionTitleOpticalBounds()
                 .padding(.top, 28)
 
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(serviceStatusColor)
+                    .frame(width: 7, height: 7)
+                Text(serviceStatusTitle)
+                    .font(AppTypography.bodyMedium)
+                Text("·")
+                    .foregroundStyle(.secondary)
+                Text(serviceStatusDetail)
+                    .font(AppTypography.supporting)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(store.inputBackendErrorMessage == nil ? 1 : 2)
+            }
+            .padding(.top, 12)
+            .accessibilityElement(children: .combine)
+            .help(serviceStatusDetail)
+
             HStack {
                 Text("在后台运行 MiCoding 输入服务")
                     .font(AppTypography.title)
@@ -3834,7 +3850,7 @@ private struct ServiceSettingsContent: View {
                 )
             }
             .frame(width: 555)
-            .padding(.top, 30)
+            .padding(.top, 28)
 
             Text("MiCoding 输入服务对于确保按键监听、应用 Profile 和 Smart Actions 在后台顺畅运行至关重要。它还会在前台应用切换后继续使用正确的按键配置。如果禁用，后台监听将停止运行，按键和自动化动作可能无法正常工作。")
                 .font(AppTypography.body)
@@ -3861,7 +3877,22 @@ private struct ServiceSettingsContent: View {
                     .foregroundStyle(Color.primary.opacity(0.72))
                     .padding(.top, 10)
                     .offset(y: -3.5)
-                Button("重新启动输入服务") { store.restartBackend(announce: true) }
+                Button(
+                    !store.remoteIsManaged
+                        ? "添加遥控器"
+                        : store.permissions.inputMonitoringGranted
+                            ? "重新启动输入服务"
+                            : "完成输入监控权限"
+                ) {
+                    if !store.remoteIsManaged {
+                        store.beginAddingDevice()
+                    } else if store.permissions.inputMonitoringGranted {
+                        store.restartBackend(announce: true)
+                    } else {
+                        store.requestInputMonitoringPermission()
+                        store.openInputMonitoringSettings()
+                    }
+                }
                     .buttonStyle(SettingsTextLinkStyle())
                     .padding(.top, 4.5)
                     .offset(y: 2)
@@ -3869,35 +3900,39 @@ private struct ServiceSettingsContent: View {
                     .opacity(store.inputServiceEnabled ? 1 : 0.35)
             }
             .padding(.top, 28)
-
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("屏幕叠加")
-                        .font(AppTypography.title)
-                        .settingsSectionTitleOpticalBounds()
-                    Spacer()
-                    CompactSettingsToggle(
-                        isOn: Binding(
-                            get: { store.showActionNotifications },
-                            set: { store.setActionNotifications($0) }
-                        ),
-                        accessibilityLabel: "屏幕叠加"
-                    )
-                }
-                .frame(width: 555)
-                Text("禁用以在执行、分配或修改动作时隐藏屏幕叠加。")
-                    .font(AppTypography.body)
-                    .foregroundStyle(Color.primary.opacity(0.72))
-                    .padding(.top, 12)
-            }
-            .padding(.top, 39)
         }
         .offset(y: -2)
     }
 
+    private var serviceStatusTitle: String {
+        if !store.inputServiceEnabled { return "服务已停用" }
+        if !store.remoteIsManaged { return "尚未添加遥控器" }
+        if !store.permissions.inputMonitoringGranted { return "需要输入监控权限" }
+        if store.inputBackendErrorMessage != nil { return "输入服务启动失败" }
+        return store.inputBackendReady ? "正在读取遥控器" : "服务已启用"
+    }
+
+    private var serviceStatusDetail: String {
+        if !store.inputServiceEnabled { return "按键与自动化监听已停止" }
+        if !store.remoteIsManaged { return "添加设备后才会启动按键监听" }
+        if !store.permissions.inputMonitoringGranted { return "完成授权后才能读取按键" }
+        if let message = store.inputBackendErrorMessage { return message }
+        return store.backendLog
+    }
+
+    private var serviceStatusColor: Color {
+        if !store.inputServiceEnabled { return .secondary }
+        if !store.remoteIsManaged { return .secondary }
+        if !store.permissions.inputMonitoringGranted { return AppTheme.warning }
+        if store.inputBackendErrorMessage != nil { return AppTheme.batteryEmpty }
+        return AppTheme.success
+    }
+
     private func openInputServiceSupport() {
-        guard let url = URL(string: "https://github.com/zhangtuansia/MiCoding#本地数据与权限") else { return }
-        NSWorkspace.shared.open(url)
+        guard let url = URL(string: "https://github.com/zhangtuansia/MiCoding#权限说明") else { return }
+        if !NSWorkspace.shared.open(url) {
+            store.showImportantToast("无法打开输入服务帮助")
+        }
     }
 }
 
@@ -3906,79 +3941,60 @@ private struct NotificationSettingsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("通知")
+            Text("屏幕提示")
                 .font(AppTypography.pageTitle)
                 .settingsPageTitleOpticalBounds()
                 .offset(y: SettingsLayoutMetrics.pageTitleOpticalYOffset)
 
-            Text("通用")
-                .font(AppTypography.title)
-                .settingsSectionTitleOpticalBounds()
-                .tracking(0.5)
-                .padding(.top, 30)
-                .offset(y: -3.5)
+            Text("这些反馈显示在 MiCoding 窗口内，不会创建 macOS 系统通知。")
+                .font(AppTypography.body)
+                .foregroundStyle(Color.primary.opacity(0.68))
+                .padding(.top, 10)
 
-            NotificationSwitchRow(
-                title: "应用程序内操作反馈",
+            SettingsToggleRow(
+                title: "操作反馈",
+                subtitle: "执行、分配或修改动作时显示结果",
                 isOn: Binding(
                     get: { store.showActionNotifications },
                     set: { store.setActionNotifications($0) }
                 )
             )
-            .padding(.top, 27)
-            .offset(y: -2)
+            .frame(width: 555)
+            .padding(.top, 24)
 
-            Text("叠加")
-                .font(AppTypography.title)
-                .settingsSectionTitleOpticalBounds()
-                .padding(.top, 30)
-                .offset(y: -1.5)
-
-            NotificationSwitchRow(
-                title: "低电量通知",
+            SettingsToggleRow(
+                title: "低电量提示",
+                subtitle: "电量首次降至 20% 或以下时提醒",
                 isOn: Binding(
                     get: { store.showLowBatteryNotifications },
                     set: { store.setLowBatteryNotifications($0) }
                 )
             )
-            .padding(.top, 27)
-            .offset(y: -0.5)
+            .frame(width: 555)
+            .padding(.top, 8)
 
-            NotificationSwitchRow(
+            SettingsToggleRow(
                 title: "权限提醒",
+                subtitle: "缺少输入监控或辅助功能权限时显示恢复入口",
                 isOn: Binding(
                     get: { store.showPermissionReminders },
                     set: { store.setPermissionReminders($0) }
                 )
             )
-            .padding(.top, 24)
-            .offset(y: 2)
+            .frame(width: 555)
+            .padding(.top, 8)
 
-            NotificationSwitchRow(
-                title: "遥控器连接状态通知",
+            SettingsToggleRow(
+                title: "连接状态提示",
+                subtitle: "遥控器连接或断开时显示状态变化",
                 isOn: Binding(
                     get: { store.showConnectionNotifications },
                     set: { store.setConnectionNotifications($0) }
                 )
             )
-            .padding(.top, 24)
+            .frame(width: 555)
+            .padding(.top, 8)
         }
-    }
-}
-
-private struct NotificationSwitchRow: View {
-    let title: String
-    @Binding var isOn: Bool
-
-    var body: some View {
-        HStack {
-            Text(title)
-                .font(AppTypography.title)
-                .settingsSectionTitleOpticalBounds()
-            Spacer()
-            CompactSettingsToggle(isOn: $isOn, accessibilityLabel: title)
-        }
-        .frame(width: 555, height: 22)
     }
 }
 
@@ -4005,24 +4021,18 @@ private struct PrivacySettingsContent: View {
                 .offset(y: SettingsLayoutMetrics.pageTitleOpticalYOffset)
 
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 0) {
-                    Text("分享使用数据，用于分析")
-                        .font(AppTypography.title)
-                        .settingsSectionTitleOpticalBounds()
-                    Spacer()
-                    CompactSettingsToggle(
-                        isOn: .constant(false),
-                        accessibilityLabel: "分享使用数据已关闭"
-                    )
-                    .disabled(true)
-                    .opacity(0.42)
+                PlainSettingsRow(
+                    title: "使用数据与分析",
+                    subtitle: "不发送诊断、使用数据或按键内容"
+                ) {
+                    HStack(spacing: 6) {
+                        AppIcon(symbol: "shield-check", size: AppIconSize.control)
+                        Text("未收集")
+                    }
+                    .font(AppTypography.label)
+                    .foregroundStyle(AppTheme.success)
                 }
                 .frame(width: 555)
-                Text("MiCoding 不包含分析 SDK，不会自动发送诊断、使用数据或按键内容。")
-                    .font(AppTypography.body)
-                    .foregroundStyle(Color.primary.opacity(0.72))
-                    .lineSpacing(3)
-                    .padding(.top, 12)
 
                 HStack(spacing: 3) {
                     Text("了解我们的")
@@ -4041,35 +4051,22 @@ private struct PrivacySettingsContent: View {
             .offset(y: -1.5)
 
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 0) {
-                    Text("推荐")
-                        .font(AppTypography.title)
-                        .settingsSectionTitleOpticalBounds()
-                    Spacer()
-                    CompactSettingsToggle(
-                        isOn: Binding(
-                            get: { store.showExperienceRecommendations },
-                            set: { store.setExperienceRecommendations($0) }
-                        ),
-                        accessibilityLabel: "体验推荐"
+                SettingsToggleRow(
+                    title: "体验推荐",
+                    subtitle: "在首页显示遥控器功能与操作模板",
+                    isOn: Binding(
+                        get: { store.showExperienceRecommendations },
+                        set: { store.setExperienceRecommendations($0) }
                     )
-                }
+                )
                 .frame(width: 555)
-                .offset(y: -3.5)
-
-                Text("精选推荐与遥控器相关的体验和操作模板。")
-                    .font(AppTypography.body)
-                    .foregroundStyle(Color.primary.opacity(0.72))
-                    .padding(.top, 12)
             }
-            .padding(.top, 24)
-            .offset(y: -1.5)
+            .padding(.top, 18)
 
             VStack(alignment: .leading, spacing: 0) {
-                Button("本地数据与权限") { revealConfiguration() }
+                Button("打开本地数据目录") { store.revealLocalDataDirectory() }
                     .font(AppTypography.bodyMedium)
-                    .foregroundStyle(Color.primary)
-                    .buttonStyle(QuietButtonStyle())
+                    .buttonStyle(SettingsTextLinkStyle())
 
                 Text("配置只保存在这台 Mac。MiCoding 仅在用户授权后读取遥控器输入并执行已分配的系统动作。")
                     .font(AppTypography.supporting)
@@ -4089,10 +4086,11 @@ private struct PrivacySettingsContent: View {
                 title: "输入监控",
                 subtitle: "读取遥控器的 HID 按键事件",
                 granted: store.permissions.inputMonitoringGranted,
-                action: {
+                request: {
                     store.requestInputMonitoringPermission()
                     store.openInputMonitoringSettings()
-                }
+                },
+                manage: store.openInputMonitoringSettings
             )
             .padding(.top, 12)
 
@@ -4100,27 +4098,21 @@ private struct PrivacySettingsContent: View {
                 title: "辅助功能",
                 subtitle: "执行键盘快捷键和系统操作",
                 granted: store.permissions.accessibilityGranted,
-                action: {
+                request: {
                     store.requestAccessibilityPermission()
                     store.openAccessibilitySettings()
-                }
+                },
+                manage: store.openAccessibilitySettings
             )
 
         }
     }
 
-    private func revealConfiguration() {
-        let url = LocalConfigurationStore().fileURL
-        if FileManager.default.fileExists(atPath: url.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        } else {
-            NSWorkspace.shared.open(url.deletingLastPathComponent())
-        }
-    }
-
     private func openPrivacyInformation() {
-        guard let url = URL(string: "https://github.com/zhangtuansia/MiCoding#本地数据与权限") else { return }
-        NSWorkspace.shared.open(url)
+        guard let url = URL(string: "https://github.com/zhangtuansia/MiCoding#本地数据与隐私") else { return }
+        if !NSWorkspace.shared.open(url) {
+            store.showImportantToast("无法打开隐私说明")
+        }
     }
 }
 
@@ -4149,8 +4141,14 @@ private struct AppearanceThemeCard: View {
                         .fill(selected ? AppTheme.accent(for: colorScheme) : Color.primary.opacity(0.28))
                         .frame(width: 21, height: 21)
                         .overlay {
-                            AppIcon(symbol: "checkmark", size: 11)
-                                .foregroundStyle(AppTheme.onAccent(for: colorScheme))
+                            if selected {
+                                AppIcon(symbol: "checkmark", size: 11)
+                                    .foregroundStyle(AppTheme.onAccent(for: colorScheme))
+                            } else {
+                                Circle()
+                                    .fill(AppTheme.primarySurface(for: colorScheme))
+                                    .frame(width: 7, height: 7)
+                            }
                         }
                 }
                 .frame(width: 21, height: 21)
@@ -4468,19 +4466,23 @@ private struct CompactSettingsToggle: View {
         Button {
             isOn.toggle()
         } label: {
-            Capsule()
-                .fill(
-                    isOn
-                        ? AppTheme.accent(for: colorScheme)
-                        : Color.primary.opacity(colorScheme == .dark ? 0.28 : 0.20)
-                )
-                .frame(width: 28, height: 16)
-                .overlay(alignment: isOn ? .trailing : .leading) {
-                    Circle()
-                        .fill(AppTheme.primarySurface(for: colorScheme))
-                        .frame(width: 12, height: 12)
-                        .padding(2)
-                }
+            ZStack {
+                Capsule()
+                    .fill(
+                        isOn
+                            ? AppTheme.accent(for: colorScheme)
+                            : Color.primary.opacity(colorScheme == .dark ? 0.30 : 0.18)
+                    )
+                    .frame(width: 34, height: 20)
+                    .overlay(alignment: isOn ? .trailing : .leading) {
+                        Circle()
+                            .fill(AppTheme.primarySurface(for: colorScheme))
+                            .frame(width: 16, height: 16)
+                            .padding(2)
+                    }
+            }
+            .frame(width: 44, height: 36)
+            .contentShape(Rectangle())
         }
         .buttonStyle(QuietButtonStyle())
         .accessibilityLabel(accessibilityLabel)
@@ -4492,20 +4494,26 @@ private struct PermissionSettingsRow: View {
     let title: String
     let subtitle: String
     let granted: Bool
-    let action: () -> Void
+    let request: () -> Void
+    let manage: () -> Void
 
     var body: some View {
         PlainSettingsRow(title: title, subtitle: subtitle) {
             if granted {
-                Label {
-                    Text("已允许")
-                } icon: {
-                    AppIcon(symbol: "checkmark.circle.fill", size: AppIconSize.control)
+                HStack(spacing: 12) {
+                    Label {
+                        Text("已允许")
+                    } icon: {
+                        AppIcon(symbol: "checkmark.circle.fill", size: AppIconSize.control)
+                    }
+                        .font(AppTypography.label)
+                        .foregroundStyle(AppTheme.success)
+
+                    Button("管理", action: manage)
+                        .buttonStyle(InlineActionButtonStyle())
                 }
-                    .font(AppTypography.label)
-                    .foregroundStyle(AppTheme.success)
             } else {
-                Button("允许") { action() }
+                Button("允许", action: request)
                     .buttonStyle(InlineActionButtonStyle())
             }
         }

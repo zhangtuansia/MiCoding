@@ -544,7 +544,9 @@ private struct ActionsRingEditorView: View {
                                 .offset(x: 3)
                         }
                         .buttonStyle(QuietButtonStyle())
-                        .help("试运行所选操作")
+                        .disabled(!canPreviewSelectedAction)
+                        .opacity(canPreviewSelectedAction ? 1 : 0.32)
+                        .help(canPreviewSelectedAction ? "试运行所选操作" : "请先选择可试运行的操作")
 
                         Button {
                             store.selectActionsRingSettings(true)
@@ -582,6 +584,11 @@ private struct ActionsRingEditorView: View {
         case .medium: ActionsRingEditorLayoutMetrics.mediumOrbitRadius
         case .large: 94
         }
+    }
+
+    private var canPreviewSelectedAction: Bool {
+        guard let index = store.selectedActionsRingIndex else { return false }
+        return store.canPreviewActionsRingAction(at: index)
     }
 }
 
@@ -1137,7 +1144,7 @@ private struct ActionsRingActionLibrary: View {
     }
 }
 
-private enum RingActionGroup: String, CaseIterable, Identifiable {
+enum RingActionGroup: String, CaseIterable, Identifiable {
     case media
     case open
     case navigation
@@ -1162,7 +1169,7 @@ private enum RingActionGroup: String, CaseIterable, Identifiable {
         case .dateAndTime: "日期和时间"
         case .widgets: "小部件"
         case .advanced: "高级"
-        case .smartActions: "EASY-SWITCH"
+        case .smartActions: "Smart Actions"
         }
     }
 
@@ -1187,7 +1194,7 @@ private enum RingActionGroup: String, CaseIterable, Identifiable {
         case .advanced:
             catalog.filter { $0.category == .recommended }
         case .smartActions:
-            []
+            installed
         }
     }
 }

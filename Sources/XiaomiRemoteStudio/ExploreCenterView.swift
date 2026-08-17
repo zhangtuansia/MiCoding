@@ -94,7 +94,7 @@ struct ExploreCenterView: View {
                     ? Color.primary.opacity(0.045)
                     : Color(red: 245 / 255, green: 245 / 255, blue: 245 / 255)
 
-                Text("逐键测试并校准 Xiaomi Remote 2 Pro")
+                Text("逐键测试与诊断 Xiaomi Remote 2 Pro")
                     .font(.custom("AvenirNext-DemiBold", size: 16.35))
                     .foregroundStyle(Color.primary.opacity(0.72))
                     .padding(.leading, 13)

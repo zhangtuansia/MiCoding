@@ -670,6 +670,7 @@ private struct ProfileStrip: View {
 
     @EnvironmentObject private var store: AppStore
     @Environment(\.colorScheme) private var colorScheme
+    @State private var profilePendingRemoval: AppProfile?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -716,6 +717,24 @@ private struct ProfileStrip: View {
             x: store.showsApplicationPicker ? -3 : (actionPanelOpen ? -26 : -4),
             y: 0.5
         )
+        .confirmationDialog(
+            profilePendingRemoval.map { "永久删除 \($0.title) Profile？" } ?? "删除 Profile？",
+            isPresented: Binding(
+                get: { profilePendingRemoval != nil },
+                set: { if !$0 { profilePendingRemoval = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let profilePendingRemoval {
+                Button("删除 Profile 及其配置", role: .destructive) {
+                    store.removeApplicationProfile(profilePendingRemoval)
+                    self.profilePendingRemoval = nil
+                }
+            }
+            Button("取消", role: .cancel) { profilePendingRemoval = nil }
+        } message: {
+            Text("单击、长按、双击和 Actions Ring 配置都会被删除。若只想暂时隐藏，请在应用列表中取消勾选。")
+        }
     }
 
     private func profileButton(for profile: AppProfile) -> some View {
@@ -746,7 +765,7 @@ private struct ProfileStrip: View {
         .contextMenu {
             if profile.id != "global" {
                 Button("移除 \(profile.title) Profile", role: .destructive) {
-                    store.removeApplicationProfile(profile)
+                    profilePendingRemoval = profile
                 }
             }
         }
@@ -1345,14 +1364,14 @@ private struct DeviceFlowWelcomeView: View {
                 .offset(x: -10.5, y: -24)
                 .frame(width: 390, height: 172)
 
-            Text("欢迎使用 MiCoding Flow")
+            Text("跨 Mac 设置指南")
                 .font(.custom("AvenirNext-Bold", size: 32))
                 .tracking(-0.4)
                 .padding(.top, 15)
                 .offset(x: -9.5, y: -3.1)
                 .scaleEffect(x: 0.991, y: 1, anchor: .topLeading)
 
-            Text("通过 Flow 顺畅使用和控制多台 Mac。使用 macOS 通用控制，将指针移至屏幕边缘即可切换至另一台 Mac。\n启用接力后，还可以在设备之间复制和粘贴文本、图像或文件。")
+            Text("MiCoding 使用 macOS 自带的通用控制与接力完成跨 Mac 操作。它不会自行发现或连接其他电脑；请在每台 Mac 的系统设置中完成配置。")
                 .font(AppTypography.body)
                 .foregroundStyle(Color.primary.opacity(0.78))
                 .multilineTextAlignment(.center)
@@ -1362,7 +1381,7 @@ private struct DeviceFlowWelcomeView: View {
                 .offset(x: -13.8, y: -1.5)
                 .scaleEffect(x: 1.019, y: 1, anchor: .topLeading)
 
-            Button("设置 FLOW", action: beginSetup)
+            Button("开始设置", action: beginSetup)
             .buttonStyle(FlowSetupButtonStyle())
             .padding(.top, 32)
             .offset(x: -11.5, y: -1.5)
@@ -1390,24 +1409,24 @@ private struct DeviceFlowSetupView: View {
                     .frame(width: 232, height: 2)
                     .position(x: proxy.size.width / 2, y: 210)
 
-                FlowComputerCard(title: "本机", status: "已就绪", ready: true)
+                FlowComputerCard(title: "本机", status: "待确认", ready: false)
                     .position(x: proxy.size.width / 2 - 108, y: 210)
 
-                FlowComputerCard(title: "其他电脑", status: nil, ready: false)
+                FlowComputerCard(title: "其他电脑", status: "需要同样设置", ready: false)
                     .position(x: proxy.size.width / 2 + 108, y: 210)
 
                 FlowSetupChecklist()
                     .position(x: proxy.size.width / 2 + 108, y: 118)
 
                 VStack(spacing: 0) {
-                    Text("连接其他电脑")
+                    Text("完成 macOS 设置")
                         .font(.custom("AvenirNext-Bold", size: 32))
                         .tracking(-0.35)
 
                     HStack(spacing: 4) {
-                        Text("在其他 Mac 上执行上述 3 个步骤，以通过 Flow 连接。")
+                        Text("请在每台 Mac 上打开通用控制、蓝牙、Wi‑Fi 与接力。")
                             .foregroundStyle(Color.primary.opacity(0.78))
-                        Button("需要帮助？") {
+                        Button("打开接力设置") {
                             store.openHandoffSettings()
                         }
                     }
@@ -1415,10 +1434,10 @@ private struct DeviceFlowSetupView: View {
                     .buttonStyle(FlowInlineLinkStyle())
                     .padding(.top, 8)
 
-                    Button("继续") {
+                    Button("打开显示器设置") {
                         store.openDisplaysSettings()
                     }
-                    .buttonStyle(FlowSetupButtonStyle(width: 62))
+                    .buttonStyle(FlowSetupButtonStyle(width: 124))
                     .padding(.top, 26)
 
                     Button("取消", action: cancel)
@@ -1430,7 +1449,7 @@ private struct DeviceFlowSetupView: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("FLOW 设置")
+        .accessibilityLabel("跨 Mac 设置指南")
     }
 }
 
@@ -1449,7 +1468,7 @@ private struct FlowComputerCard: View {
             if let status {
                 Text(status)
                     .font(AppTypography.bodyMedium)
-                    .foregroundStyle(AppTheme.success)
+                    .foregroundStyle(ready ? AppTheme.success : Color.secondary)
                     .padding(.horizontal, 8)
                     .frame(height: 24)
                     .background(AppTheme.surface(for: colorScheme))
@@ -1768,6 +1787,7 @@ private struct DeviceInformationView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var confirmsReset = false
     @State private var confirmsRemoval = false
+    @State private var pendingBackupData: Data?
 
     var body: some View {
         GeometryReader { geometry in
@@ -1898,18 +1918,18 @@ private struct DeviceInformationView: View {
                 .padding(.top, 11)
                 .offset(y: DeviceDetailLayoutMetrics.informationBackupActionsYOffset)
 
-                Text("恢复默认设置")
+                Text("清除按键配置")
                     .font(AppTypography.title)
                     .deviceSettingsTitleOpticalBounds()
                     .padding(.top, 30)
                     .offset(y: DeviceDetailLayoutMetrics.informationResetSectionYOffset)
-                Text("将所有应用 Profile 的单击、长按和双击分配恢复为默认。")
+                Text("清除所有应用 Profile 的单击、长按和双击分配。")
                     .font(AppTypography.body)
                     .deviceSettingsBodyOpticalBounds()
                     .foregroundStyle(Color.primary.opacity(0.76))
                     .padding(.top, 6)
                     .offset(y: DeviceDetailLayoutMetrics.informationResetSectionYOffset)
-                Button("重置为默认设置") { confirmsReset = true }
+                Button("清除所有按键配置") { confirmsReset = true }
                 .buttonStyle(DeviceSettingsInlineActionButtonStyle())
                 .padding(.top, 11)
                 .offset(y: DeviceDetailLayoutMetrics.informationResetSectionYOffset)
@@ -1979,11 +1999,26 @@ private struct DeviceInformationView: View {
             )
             .offset(y: DeviceDetailLayoutMetrics.informationYOffset)
         }
-        .alert("恢复默认按键设置？", isPresented: $confirmsReset) {
+        .alert("清除所有按键配置？", isPresented: $confirmsReset) {
             Button("取消", role: .cancel) {}
-            Button("恢复默认", role: .destructive) { store.resetDeviceConfiguration() }
+            Button("清除", role: .destructive) { store.resetDeviceConfiguration() }
         } message: {
             Text("所有应用 Profile 的单击、长按和双击分配都会被清除。")
+        }
+        .confirmationDialog(
+            "恢复此备份？",
+            isPresented: Binding(
+                get: { pendingBackupData != nil },
+                set: { if !$0 { pendingBackupData = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("恢复并覆盖当前配置", role: .destructive) {
+                restorePendingBackup()
+            }
+            Button("取消", role: .cancel) { pendingBackupData = nil }
+        } message: {
+            Text("当前按键、手势、Smart Actions 和 Actions Ring 配置会被备份内容替换。")
         }
         .confirmationDialog(
             "从 MiCoding 移除设备？",
@@ -2016,7 +2051,7 @@ private struct DeviceInformationView: View {
             try store.makeDeviceBackupData().write(to: url, options: .atomic)
             store.showToast("设备配置已导出")
         } catch {
-            store.showToast("导出失败：\(error.localizedDescription)")
+            store.showImportantToast("导出失败：\(error.localizedDescription)")
         }
     }
 
@@ -2029,10 +2064,20 @@ private struct DeviceInformationView: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         do {
-            try store.restoreDeviceBackupData(Data(contentsOf: url))
+            pendingBackupData = try Data(contentsOf: url)
+        } catch {
+            store.showImportantToast("导入失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func restorePendingBackup() {
+        guard let data = pendingBackupData else { return }
+        pendingBackupData = nil
+        do {
+            try store.restoreDeviceBackupData(data)
             store.showToast("设备配置已恢复")
         } catch {
-            store.showToast("导入失败：\(error.localizedDescription)")
+            store.showImportantToast("导入失败：\(error.localizedDescription)")
         }
     }
 

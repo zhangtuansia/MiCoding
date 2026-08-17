@@ -4,10 +4,6 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AppStore: ObservableObject {
-    static let languageSettingsURLs = [
-        "x-apple.systempreferences:com.apple.Localization-Settings.extension",
-        "x-apple.systempreferences:com.apple.Localization"
-    ]
     static let displaysSettingsURLs = [
         "x-apple.systempreferences:com.apple.Displays-Settings.extension",
         "x-apple.systempreferences:com.apple.preference.displays"
@@ -46,12 +42,14 @@ final class AppStore: ObservableObject {
     @Published private(set) var batteryLevel: Int?
     @Published private(set) var firmwareVersion: String?
     @Published private(set) var inputBackendReady = false
+    @Published private(set) var inputBackendErrorMessage: String?
     @Published var pressedSlotID: String?
     @Published private(set) var detectedPhysicalKeyIDs: Set<String> = []
     @Published private(set) var unknownPhysicalUsages: Set<UInt32> = []
     @Published private(set) var lastUnknownPhysicalUsageDate: Date?
     @Published var draggedActionID: String?
     @Published var toastMessage: String?
+    @Published private(set) var toastTone: ToastTone = .info
     @Published var useDarkAppearance = false
     @Published var appearanceMode: AppAppearanceMode = .system
     @Published var automaticUpdatesEnabled = true
@@ -97,6 +95,7 @@ final class AppStore: ObservableObject {
     private var hasPresentedConfigurationLoadWarning = false
     private var configurationPersistenceBlocked = false
     private var hasPresentedConfigurationSaveWarning = false
+    private var toastSequence: UInt64 = 0
     private let runtimeServicesEnabled: Bool
     private let actionsRingOverlayController = ActionsRingOverlayController()
 
@@ -146,6 +145,7 @@ final class AppStore: ObservableObject {
             handlePhysicalInput(event)
             devicePresent = true
             inputBackendReady = true
+            inputBackendErrorMessage = nil
             connectionState = .connected
             backendLog = "收到 \(event.slotID) \(event.phase == .began ? "按下" : "松开")"
             refreshBatteryLevel()
@@ -173,6 +173,7 @@ final class AppStore: ObservableObject {
             let previousState = self.connectionState
             self.inputBackendReady = connected
             if connected {
+                self.inputBackendErrorMessage = nil
                 self.devicePresent = true
                 self.connectionState = .connected
                 self.refreshBatteryLevel()
@@ -187,6 +188,16 @@ final class AppStore: ObservableObject {
         }
         coordinator.onLog = { [weak self] message in
             self?.backendLog = message
+        }
+        coordinator.onAutomaticExecutionResult = { [weak self] actionID, result in
+            guard let self else { return }
+            let title = self.resolvedAction(id: actionID)?.title ?? actionID
+            switch result {
+            case .success:
+                self.showToast("已执行“\(title)”")
+            case let .failure(message):
+                self.showImportantToast("“\(title)”执行失败：\(message)")
+            }
         }
         return coordinator
     }()
@@ -290,12 +301,19 @@ final class AppStore: ObservableObject {
     }
 
     private func migrateLegacyAssignments() {
-        for profileID in Array(assignmentsByProfile.keys) {
-            guard var assignments = assignmentsByProfile[profileID],
+        assignmentsByProfile = Self.migratedLegacyAssignments(assignmentsByProfile)
+    }
+
+    private static func migratedLegacyAssignments(
+        _ source: [String: [String: String]]
+    ) -> [String: [String: String]] {
+        var result = source
+        for profileID in Array(result.keys) {
+            guard var assignments = result[profileID],
                   assignments["voice"] == nil,
                   let legacyAction = assignments.removeValue(forKey: "assistant") else { continue }
             assignments["voice"] = legacyAction
-            assignmentsByProfile[profileID] = assignments
+            result[profileID] = assignments
         }
 
         // Releases before directional actions existed shipped the otherwise
@@ -303,19 +321,20 @@ final class AppStore: ObservableObject {
         // that exact legacy shape and fill the missing native arrow behavior.
         // A deliberately cleared/custom map does not satisfy this signature,
         // so reset configurations remain empty.
-        guard var globalAssignments = assignmentsByProfile["global"],
+        guard var globalAssignments = result["global"],
               globalAssignments["power"] == "lock",
               globalAssignments["voice"] == "spotlight",
               globalAssignments["ok"] == "play-pause",
               globalAssignments["back"] == "browser-back",
               ["up", "down", "left", "right"].allSatisfy({ globalAssignments[$0] == nil }) else {
-            return
+            return result
         }
         globalAssignments["up"] = "arrow-up"
         globalAssignments["down"] = "arrow-down"
         globalAssignments["left"] = "arrow-left"
         globalAssignments["right"] = "arrow-right"
-        assignmentsByProfile["global"] = globalAssignments
+        result["global"] = globalAssignments
+        return result
     }
 
     var preferredColorScheme: ColorScheme? {
@@ -330,6 +349,9 @@ final class AppStore: ObservableObject {
         guard devicePresent else { return "未连接" }
         guard permissions.inputMonitoringGranted else {
             return "已连接，等待输入监控权限"
+        }
+        if let inputBackendErrorMessage {
+            return "已连接，输入服务启动失败：\(inputBackendErrorMessage)"
         }
         return inputBackendReady ? "已连接并监听按键" : "已连接，正在启动 HID 监听"
     }
@@ -533,6 +555,7 @@ final class AppStore: ObservableObject {
         remoteIsManaged = false
         backendCoordinator.stop()
         inputBackendReady = false
+        inputBackendErrorMessage = nil
         devicePresent = false
         connectionState = .disconnected
         batteryLevel = nil
@@ -793,6 +816,15 @@ final class AppStore: ObservableObject {
         return eligibleAction(id: actionIDs[index], for: .actionsRing)
     }
 
+    func canPreviewActionsRingAction(at index: Int) -> Bool {
+        guard actionsRingActionIDs.indices.contains(index),
+              let action = eligibleAction(
+                id: actionsRingActionIDs[index],
+                for: .actionsRing
+              ) else { return false }
+        return ActionsRingFolderCatalog.definition(for: action.id) == nil
+    }
+
     /// Runs the action currently visible in the editor's selected profile.
     func runActionsRingAction(at index: Int) {
         guard actionsRingActionIDs.indices.contains(index),
@@ -800,6 +832,10 @@ final class AppStore: ObservableObject {
                 id: actionsRingActionIDs[index],
                 for: .actionsRing
               ) else { return }
+        guard ActionsRingFolderCatalog.definition(for: action.id) == nil else {
+            showToast("文件夹会在运行时展开，不能单独试运行")
+            return
+        }
         runAction(actionID: action.id, title: action.title)
     }
 
@@ -1091,8 +1127,9 @@ final class AppStore: ObservableObject {
             : "进入配对模式后，在系统蓝牙中连接遥控器")
     }
 
-    func startBackend() {
-        guard runtimeServicesEnabled else { return }
+    @discardableResult
+    func startBackend() -> BackendInputStartResult {
+        guard runtimeServicesEnabled else { return .inactive }
         defer { presentConfigurationLoadWarningIfNeeded() }
         scheduleAutomaticUpdateCheckIfNeeded()
         refreshPermissions()
@@ -1102,38 +1139,55 @@ final class AppStore: ObservableObject {
             devicePresent = false
             connectionState = .disconnected
             backendLog = "设备已从 MiCoding 移除"
-            return
+            inputBackendErrorMessage = nil
+            return .deviceNotManaged
         }
         refreshDevicePresence()
         refreshBatteryLevel()
         guard inputServiceEnabled else {
             inputBackendReady = false
+            inputBackendErrorMessage = nil
             backendLog = "MiCoding 输入服务已停用"
-            return
+            return .inactive
         }
         refreshShortcutBindings()
         backendCoordinator.startAutomationTriggers()
         guard permissions.inputMonitoringGranted else {
             inputBackendReady = false
+            inputBackendErrorMessage = nil
             backendLog = devicePresent
                 ? "已检测到遥控器；授予输入监控权限后即可读取按键"
                 : "等待 Xiaomi Remote 2 Pro 连接"
-            return
+            return .permissionRequired
         }
-        backendCoordinator.start()
+        let result = backendCoordinator.start()
+        if case let .failed(message) = result {
+            inputBackendErrorMessage = message
+        } else {
+            inputBackendErrorMessage = nil
+        }
+        return result
     }
 
     func restartBackend(announce: Bool = false) {
         backendCoordinator.stop()
-        startBackend()
+        let startResult = startBackend()
         guard announce else { return }
 
         if !inputServiceEnabled {
             showToast("MiCoding 输入服务已停用")
+        } else if startResult == .deviceNotManaged {
+            showImportantToast("请先将 Xiaomi Remote 2 Pro 添加到 MiCoding")
         } else if !permissions.inputMonitoringGranted {
-            showToast("需要输入监控权限后才能启动输入服务")
-        } else {
+            showImportantToast("需要输入监控权限后才能启动输入服务")
+        } else if startResult == .permissionRequired {
+            showImportantToast("需要输入监控权限后才能启动输入服务")
+        } else if case let .failed(message) = startResult {
+            showImportantToast("MiCoding 输入服务启动失败：\(message)")
+        } else if startResult == .started || startResult == .alreadyRunning {
             showToast("MiCoding 输入服务已重新启动")
+        } else {
+            showImportantToast("MiCoding 输入服务当前不可用")
         }
     }
 
@@ -1154,7 +1208,7 @@ final class AppStore: ObservableObject {
     func toggleApplicationProfile(_ profile: AppProfile) {
         guard profile.id != "global" else { return }
         if isApplicationProfileEnabled(profile) {
-            removeApplicationProfile(profile)
+            disableApplicationProfile(profile)
         } else {
             removedProfileIDs.remove(profile.id)
             profiles.append(profile)
@@ -1162,6 +1216,27 @@ final class AppStore: ObservableObject {
             persistConfiguration()
             showToast("已添加 \(profile.title) Profile")
         }
+    }
+
+    /// Hides a Profile from the active device without destroying its mappings.
+    /// The application picker is a checkbox list, so unchecking must be
+    /// reversible; permanent deletion remains a separate, confirmed action.
+    func disableApplicationProfile(_ profile: AppProfile) {
+        guard profile.id != "global" else { return }
+        profiles.removeAll(where: { $0.id == profile.id })
+        removedProfileIDs.insert(profile.id)
+
+        if selectedProfileID == profile.id {
+            selectedProfileID = "global"
+        }
+        if selectedActionsRingProfileID == profile.id {
+            selectedActionsRingProfileID = "global"
+            actionsRingActionIDs = actionsRingAssignmentsByProfile["global"]
+                ?? AppStore.defaultActionsRingActionIDs
+        }
+
+        persistConfiguration()
+        showToast("已隐藏 \(profile.title) Profile；现有配置已保留")
     }
 
     func addApplicationProfile(_ profile: AppProfile) {
@@ -1327,16 +1402,17 @@ final class AppStore: ObservableObject {
                 guard !Task.isCancelled, let self else { return }
                 SoftwareUpdateService.logFailure(error)
                 softwareUpdateStatus = .failed
-                if announceResult { showToast("暂时无法连接更新服务") }
+                if announceResult { showImportantToast("暂时无法连接更新服务") }
             }
             self?.updateCheckTask = nil
         }
     }
 
     func openUpdatePage() {
-        NSWorkspace.shared.open(
-            softwareUpdateStatus.releaseURL ?? SoftwareUpdateService.releasesPageURL
-        )
+        let url = softwareUpdateStatus.releaseURL ?? SoftwareUpdateService.releasesPageURL
+        if !NSWorkspace.shared.open(url) {
+            showImportantToast("无法打开 GitHub 发布页")
+        }
     }
 
     private func scheduleAutomaticUpdateCheckIfNeeded() {
@@ -1355,10 +1431,21 @@ final class AppStore: ObservableObject {
     func setInputServiceEnabled(_ enabled: Bool) {
         inputServiceEnabled = enabled
         if enabled {
-            startBackend()
+            let result = startBackend()
+            switch result {
+            case .deviceNotManaged:
+                showImportantToast("请先将 Xiaomi Remote 2 Pro 添加到 MiCoding")
+            case .permissionRequired:
+                showImportantToast("需要输入监控权限后才能启动输入服务")
+            case let .failed(message):
+                showImportantToast("MiCoding 输入服务启动失败：\(message)")
+            case .started, .alreadyRunning, .inactive:
+                break
+            }
         } else {
             backendCoordinator.stop()
             inputBackendReady = false
+            inputBackendErrorMessage = nil
             backendLog = "MiCoding 输入服务已停用"
         }
         persistConfiguration()
@@ -1384,10 +1471,28 @@ final class AppStore: ObservableObject {
             throw DeviceConfigurationBackupError.incompatibleDevice(backup.deviceID)
         }
 
-        let saved = backup.configuration
-        guard saved.version == PersistedConfiguration.currentVersion else {
-            throw DeviceConfigurationBackupError.unsupportedConfigurationVersion(saved.version)
+        let backupConfiguration = backup.configuration
+        guard backupConfiguration.version == PersistedConfiguration.currentVersion else {
+            throw DeviceConfigurationBackupError.unsupportedConfigurationVersion(backupConfiguration.version)
         }
+
+        // A device backup owns mappings, gesture timing, Profiles, Smart
+        // Actions and the Actions Ring. Preferences that belong to this Mac
+        // (appearance, update checks, device management and prompt choices)
+        // remain unchanged. Build and normalize that merged configuration
+        // before the first write so disk and live state cannot diverge.
+        let saved = normalizedDeviceRestoreConfiguration(from: backupConfiguration)
+
+        // Persist the validated backup before mutating live state. This makes
+        // restore transactional with respect to disk failures: an unwritable
+        // data directory leaves the current in-memory configuration untouched
+        // and the caller receives a real error instead of a false success.
+        do {
+            try configurationStore.save(saved)
+        } catch {
+            throw DeviceConfigurationBackupError.couldNotSave(error.localizedDescription)
+        }
+
         assignmentsByProfile = saved.assignmentsByProfile
         migrateLegacyAssignments()
         holdAssignmentsByProfile = saved.holdAssignmentsByProfile
@@ -1438,10 +1543,79 @@ final class AppStore: ObservableObject {
         refreshShortcutBindings()
         configurationPersistenceBlocked = false
         configurationLoadWarning = nil
-        persistConfiguration()
         if inputServiceEnabled {
             restartBackend()
         }
+    }
+
+    private func normalizedDeviceRestoreConfiguration(
+        from source: PersistedConfiguration
+    ) -> PersistedConfiguration {
+        var result = currentConfiguration()
+        result.version = source.version
+        var normalizedSettings = source.settings
+        normalizedSettings.holdMilliseconds = min(max(source.settings.holdMilliseconds, 250), 800)
+        normalizedSettings.doubleTapMilliseconds = min(max(source.settings.doubleTapMilliseconds, 150), 500)
+        normalizedSettings.debounceMilliseconds = min(
+            max(source.settings.debounceMilliseconds ?? 30, 10),
+            100
+        )
+        result.settings = normalizedSettings
+        result.assignmentsByProfile = Self.migratedLegacyAssignments(source.assignmentsByProfile)
+        result.holdAssignmentsByProfile = source.holdAssignmentsByProfile
+        result.doubleTapAssignmentsByProfile = source.doubleTapAssignmentsByProfile
+
+        let removedProfileIDs = Set(source.removedProfileIDs ?? [])
+        result.removedProfileIDs = removedProfileIDs.sorted()
+        result.lastProfileID = isRestorableProfile(
+            source.lastProfileID,
+            removedProfileIDs: removedProfileIDs
+        ) ? source.lastProfileID : "global"
+
+        let restoredActions = (source.customSmartActions ?? [])
+            .compactMap(SmartAction.restored(from:))
+            .reduce(into: [SmartAction]()) { actions, action in
+                guard !actions.contains(where: { $0.id == action.id }) else { return }
+                actions.append(normalizedSmartAction(action, against: actions).action)
+            }
+        result.customSmartActions = restoredActions.map(\.persistedRepresentation)
+
+        let legacyRingActions = migratedActionsRingActionIDs(source.actionsRingActionIDs ?? [])
+        var ringAssignments = (source.actionsRingAssignmentsByProfile ?? [:])
+            .filter { $0.value.count == 8 }
+            .mapValues(migratedActionsRingActionIDs)
+        if ringAssignments.isEmpty, legacyRingActions.count == 8 {
+            ringAssignments = ["global": legacyRingActions]
+        }
+        if ringAssignments["global"] == nil {
+            ringAssignments["global"] = AppStore.defaultActionsRingActionIDs
+        }
+        result.actionsRingAssignmentsByProfile = ringAssignments
+        result.actionsRingSize = source.actionsRingSize ?? .medium
+
+        let requestedRingProfileID = source.lastActionsRingProfileID ?? "global"
+        let restoredRingProfileID = isRestorableProfile(
+            requestedRingProfileID,
+            removedProfileIDs: removedProfileIDs
+        ) && ringAssignments[requestedRingProfileID] != nil
+            ? requestedRingProfileID
+            : "global"
+        result.lastActionsRingProfileID = restoredRingProfileID
+        result.actionsRingActionIDs = ringAssignments[restoredRingProfileID]
+            ?? ringAssignments["global"]
+            ?? AppStore.defaultActionsRingActionIDs
+        return result
+    }
+
+    private func isRestorableProfile(
+        _ profileID: String,
+        removedProfileIDs: Set<String>
+    ) -> Bool {
+        guard !removedProfileIDs.contains(profileID) else { return false }
+        if profileID == "global" || AppProfile.profiles.contains(where: { $0.id == profileID }) {
+            return true
+        }
+        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: profileID) != nil
     }
 
     private func migratedActionsRingActionIDs(_ actionIDs: [String]) -> [String] {
@@ -1488,7 +1662,7 @@ final class AppStore: ObservableObject {
         if enabled,
            let batteryLevel,
            let warning = recordBatteryLevel(batteryLevel) {
-            displayToast(warning)
+            displayToast(warning, tone: .warning)
         }
     }
 
@@ -1593,6 +1767,13 @@ final class AppStore: ObservableObject {
         removeAssignments(to: action.actionID, from: &assignmentsByProfile)
         removeAssignments(to: action.actionID, from: &holdAssignmentsByProfile)
         removeAssignments(to: action.actionID, from: &doubleTapAssignmentsByProfile)
+        for profileID in Array(actionsRingAssignmentsByProfile.keys) {
+            actionsRingAssignmentsByProfile[profileID] = actionsRingAssignmentsByProfile[profileID]?
+                .map { $0 == action.actionID ? "" : $0 }
+        }
+        actionsRingActionIDs = actionsRingAssignmentsByProfile[selectedActionsRingProfileID]
+            ?? actionsRingAssignmentsByProfile["global"]
+            ?? AppStore.defaultActionsRingActionIDs
         if pendingAssignmentActionID == action.actionID {
             pendingAssignmentActionID = nil
         }
@@ -1622,6 +1803,7 @@ final class AppStore: ObservableObject {
            !permissions.inputMonitoringGranted {
             backendCoordinator.stopInput()
             inputBackendReady = false
+            inputBackendErrorMessage = nil
             backendLog = devicePresent
                 ? "输入监控权限已撤销；已恢复遥控器原始按键"
                 : "输入监控权限已撤销"
@@ -1699,7 +1881,7 @@ final class AppStore: ObservableObject {
                 self?.firmwareVersion = firmwareVersion
             }
             if let lowBatteryWarning {
-                self?.displayToast(lowBatteryWarning)
+                self?.displayToast(lowBatteryWarning, tone: .warning)
             } else if announceResult {
                 switch (snapshot?.batteryLevel, snapshot?.firmwareVersion) {
                 case let (level?, firmwareVersion?):
@@ -1789,11 +1971,24 @@ final class AppStore: ObservableObject {
         )
     }
 
-    func openLanguageSettings() {
-        openSystemSettings(
-            urls: Self.languageSettingsURLs,
-            failureMessage: "请在系统设置的“语言与地区”中更改系统语言"
-        )
+    func revealLocalDataDirectory() {
+        let configurationURL = configurationStore.fileURL
+        let directoryURL = configurationURL.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            showImportantToast("无法打开本地数据目录：\(error.localizedDescription)")
+            return
+        }
+
+        if FileManager.default.fileExists(atPath: configurationURL.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([configurationURL])
+        } else if !NSWorkspace.shared.open(directoryURL) {
+            showImportantToast("无法在 Finder 中打开 MiCoding 的本地数据目录")
+        }
     }
 
     func runAction(
@@ -2060,7 +2255,7 @@ final class AppStore: ObservableObject {
         for value in urls {
             if let url = URL(string: value), NSWorkspace.shared.open(url) { return }
         }
-        showToast(failureMessage)
+        showImportantToast(failureMessage)
     }
 
     private func restoreCustomProfiles() {
@@ -2168,24 +2363,27 @@ final class AppStore: ObservableObject {
 
     func showToast(_ message: String) {
         guard showActionNotifications else { return }
-        displayToast(message)
+        displayToast(message, tone: .info)
     }
 
     /// Errors and user-requested recovery guidance must remain visible even
     /// when routine action overlays are disabled in Settings.
     func showImportantToast(_ message: String) {
-        displayToast(message)
+        displayToast(message, tone: .error)
     }
 
     private func showConnectionToast(_ message: String) {
         guard showConnectionNotifications else { return }
-        displayToast(message)
+        displayToast(message, tone: .info)
     }
 
-    private func displayToast(_ message: String) {
+    private func displayToast(_ message: String, tone: ToastTone) {
+        toastSequence &+= 1
+        let sequence = toastSequence
+        toastTone = tone
         toastMessage = message
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
-            guard self?.toastMessage == message else { return }
+            guard self?.toastSequence == sequence else { return }
             self?.toastMessage = nil
         }
     }

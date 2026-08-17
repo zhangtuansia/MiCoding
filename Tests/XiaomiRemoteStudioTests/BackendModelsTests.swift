@@ -30,15 +30,12 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertNotNil(NSFont(name: AppTypography.latinDisplayFontName, size: 33))
     }
 
-    @MainActor
-    func testLanguageMenuTargetsTheInstalledLocalizationSettingsPane() {
-        let urls = AppStore.languageSettingsURLs
+    func testInterfaceLanguagePresentationMatchesTheSingleShippedLocalization() {
+        XCTAssertEqual(InterfaceLanguageSupport.languageCode, "zh-Hans")
+        XCTAssertEqual(InterfaceLanguageSupport.displayName, "简体中文")
         XCTAssertEqual(
-            urls.first,
-            "x-apple.systempreferences:com.apple.Localization-Settings.extension"
-        )
-        XCTAssertTrue(
-            urls.allSatisfy { URL(string: $0) != nil }
+            InterfaceLanguageSupport.availabilityDescription,
+            "当前版本支持的显示语言"
         )
     }
 
@@ -116,7 +113,7 @@ final class BackendModelsTests: XCTestCase {
             inputMonitoringGranted: true
         )
         store.restartBackend(announce: true)
-        XCTAssertEqual(store.toastMessage, "MiCoding 输入服务已重新启动")
+        XCTAssertEqual(store.toastMessage, "MiCoding 输入服务当前不可用")
 
         store.permissions = PermissionSnapshot(
             accessibilityGranted: true,
@@ -128,6 +125,28 @@ final class BackendModelsTests: XCTestCase {
         store.inputServiceEnabled = false
         store.restartBackend(announce: true)
         XCTAssertEqual(store.toastMessage, "MiCoding 输入服务已停用")
+    }
+
+    @MainActor
+    func testBackendRestartRequiresAManagedRemoteInsteadOfReportingSuccess() {
+        let coordinator = BackendCoordinator(
+            inputService: ControllableRemoteInputService(),
+            keyRemapper: nil
+        )
+        let store = makeIsolatedStore(
+            runtimeServicesEnabled: true,
+            backendCoordinator: coordinator
+        )
+        store.setAutomaticUpdates(false)
+        store.removeManagedDevice(openBluetoothSettings: false)
+
+        store.restartBackend(announce: true)
+
+        XCTAssertEqual(
+            store.toastMessage,
+            "请先将 Xiaomi Remote 2 Pro 添加到 MiCoding"
+        )
+        XCTAssertEqual(store.toastTone, .error)
     }
 
     func testAutomationLibraryLayoutMatchesReferenceGeometry() {
@@ -1060,6 +1079,24 @@ final class BackendModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testBackendCoordinatorStartReportsInputServiceFailure() {
+        let input = FailingRemoteInputService(message: "测试 HID 启动失败")
+        let coordinator = BackendCoordinator(inputService: input, keyRemapper: nil)
+        var connectionStates: [Bool] = []
+        var logMessages: [String] = []
+        coordinator.onConnectionChanged = { connectionStates.append($0) }
+        coordinator.onLog = { logMessages.append($0) }
+
+        XCTAssertEqual(coordinator.start(), .failed("测试 HID 启动失败"))
+        XCTAssertEqual(connectionStates, [false])
+        XCTAssertEqual(logMessages.last, "测试 HID 启动失败")
+
+        // A failed start remains retryable instead of being marked as running.
+        XCTAssertEqual(coordinator.start(), .failed("测试 HID 启动失败"))
+        XCTAssertEqual(input.startCount, 2)
+    }
+
+    @MainActor
     func testKeyMappingWaitsForConfirmedHIDConnection() async {
         let input = ControllableRemoteInputService()
         let remapper = RecordingDeviceKeyRemapper()
@@ -1221,6 +1258,19 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(backup.deviceID, RemoteDevice.remote2Pro.id)
         XCTAssertEqual(backup.exportedAt, exportedAt)
 
+        // Device backups must not overwrite preferences that belong to the
+        // current Mac. Keep these deliberately opposite to the exported file
+        // and verify that live state and the next launch remain identical.
+        store.setAppearanceMode(.dark)
+        store.setAutomaticUpdates(false)
+        store.setInputServiceEnabled(false)
+        store.setActionNotifications(false)
+        store.setPermissionReminders(false)
+        store.setExperienceRecommendations(false)
+        store.setConnectionNotifications(false)
+        store.setLowBatteryNotifications(false)
+        store.removeManagedDevice(openBluetoothSettings: false)
+
         store.assign(lockAction, to: okSlot)
         store.setHoldMilliseconds(400)
         store.setDoubleTapMilliseconds(200)
@@ -1238,6 +1288,15 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(runtimeGestureEngine.doubleTapMilliseconds, 475)
         XCTAssertEqual(runtimeGestureEngine.debounceMilliseconds, 90)
         XCTAssertTrue(store.smartActions.contains(where: { $0.actionID == action.actionID }))
+        XCTAssertEqual(store.appearanceMode, .dark)
+        XCTAssertFalse(store.automaticUpdatesEnabled)
+        XCTAssertFalse(store.inputServiceEnabled)
+        XCTAssertFalse(store.showActionNotifications)
+        XCTAssertFalse(store.showPermissionReminders)
+        XCTAssertFalse(store.showExperienceRecommendations)
+        XCTAssertFalse(store.showConnectionNotifications)
+        XCTAssertFalse(store.showLowBatteryNotifications)
+        XCTAssertFalse(store.remoteIsManaged)
 
         let reloaded = AppStore(
             configurationStore: configurationStore,
@@ -1246,6 +1305,15 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertEqual(reloaded.action(for: "ok")?.id, "copy")
         XCTAssertEqual(reloaded.holdMilliseconds, 725)
         XCTAssertTrue(reloaded.smartActions.contains(where: { $0.actionID == action.actionID }))
+        XCTAssertEqual(reloaded.appearanceMode, store.appearanceMode)
+        XCTAssertEqual(reloaded.automaticUpdatesEnabled, store.automaticUpdatesEnabled)
+        XCTAssertEqual(reloaded.inputServiceEnabled, store.inputServiceEnabled)
+        XCTAssertEqual(reloaded.showActionNotifications, store.showActionNotifications)
+        XCTAssertEqual(reloaded.showPermissionReminders, store.showPermissionReminders)
+        XCTAssertEqual(reloaded.showExperienceRecommendations, store.showExperienceRecommendations)
+        XCTAssertEqual(reloaded.showConnectionNotifications, store.showConnectionNotifications)
+        XCTAssertEqual(reloaded.showLowBatteryNotifications, store.showLowBatteryNotifications)
+        XCTAssertEqual(reloaded.remoteIsManaged, store.remoteIsManaged)
     }
 
     @MainActor
@@ -1407,6 +1475,57 @@ final class BackendModelsTests: XCTestCase {
         store.toggleApplicationProfile(profile)
         XCTAssertTrue(store.showsApplicationPicker)
         XCTAssertFalse(store.isApplicationProfileEnabled(profile))
+    }
+
+    @MainActor
+    func testDisablingAndReenablingApplicationProfilePreservesEveryMapping() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiCoding-PreservedProfile-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configurationStore = LocalConfigurationStore(
+            fileURL: directory.appendingPathComponent("config.json")
+        )
+        let store = AppStore(configurationStore: configurationStore, runtimeServicesEnabled: false)
+        let profile = AppProfile(
+            id: "com.example.preserved-profile",
+            title: "Preserved Profile",
+            subtitle: "应用专属配置",
+            symbol: "app.dashed",
+            tint: .gray,
+            bundleIdentifier: "com.example.preserved-profile"
+        )
+        let slot = try XCTUnwrap(RemoteButtonSlot.demoSlots.first(where: { $0.id == "ok" }))
+        let copy = try XCTUnwrap(RemoteAction.catalog.first(where: { $0.id == "copy" }))
+        let paste = try XCTUnwrap(RemoteAction.catalog.first(where: { $0.id == "paste" }))
+        let lock = try XCTUnwrap(RemoteAction.catalog.first(where: { $0.id == "lock" }))
+
+        store.toggleApplicationProfile(profile)
+        store.selectProfile(profile)
+        store.selectedTrigger = .tap
+        store.assign(copy, to: slot)
+        store.selectedTrigger = .hold
+        store.assign(paste, to: slot)
+        store.selectedTrigger = .doubleTap
+        store.assign(lock, to: slot)
+        store.selectActionsRingProfile(profile)
+        XCTAssertTrue(store.assignActionToActionsRing(actionID: copy.id, at: 2))
+
+        store.toggleApplicationProfile(profile)
+        XCTAssertFalse(store.isApplicationProfileEnabled(profile))
+        XCTAssertEqual(store.selectedProfileID, "global")
+        XCTAssertEqual(store.selectedActionsRingProfileID, "global")
+
+        let reloaded = AppStore(configurationStore: configurationStore, runtimeServicesEnabled: false)
+        XCTAssertFalse(reloaded.isApplicationProfileEnabled(profile))
+        reloaded.toggleApplicationProfile(profile)
+        reloaded.selectProfile(profile)
+        XCTAssertEqual(reloaded.action(for: slot.id, trigger: .tap)?.id, copy.id)
+        XCTAssertEqual(reloaded.action(for: slot.id, trigger: .hold)?.id, paste.id)
+        XCTAssertEqual(reloaded.action(for: slot.id, trigger: .doubleTap)?.id, lock.id)
+        XCTAssertEqual(
+            reloaded.actionsRingActionIDs(for: profile.bundleIdentifier)[2],
+            copy.id
+        )
     }
 
     @MainActor
@@ -2524,6 +2643,36 @@ final class BackendModelsTests: XCTestCase {
         })
     }
 
+    func testActionsRingSmartActionGroupReturnsInstalledCatalog() throws {
+        let installed = [
+            try XCTUnwrap(RemoteAction.catalog.first(where: { $0.id == "copy" })),
+            try XCTUnwrap(RemoteAction.catalog.first(where: { $0.id == "paste" }))
+        ]
+
+        XCTAssertEqual(RingActionGroup.smartActions.title, "Smart Actions")
+        XCTAssertEqual(
+            RingActionGroup.smartActions.actions(from: RemoteAction.catalog, installed: installed),
+            installed
+        )
+    }
+
+    @MainActor
+    func testActionsRingFolderCannotBePreviewedButExecutableActionCan() throws {
+        let store = makeIsolatedStore()
+        let folder = try XCTUnwrap(
+            RemoteAction.catalog.first(where: { $0.eligibility == .actionsRingOnly })
+        )
+        let copy = try XCTUnwrap(RemoteAction.catalog.first(where: { $0.id == "copy" }))
+
+        store.selectActionsRingSlot(0)
+        store.clearSelectedActionsRingSlot()
+        XCTAssertFalse(store.canPreviewActionsRingAction(at: 0))
+        XCTAssertTrue(store.assignActionToActionsRing(actionID: folder.id, at: 0))
+        XCTAssertFalse(store.canPreviewActionsRingAction(at: 0))
+        XCTAssertTrue(store.assignActionToActionsRing(actionID: copy.id, at: 0))
+        XCTAssertTrue(store.canPreviewActionsRingAction(at: 0))
+    }
+
     func testSpecialActionEligibilityIsCentralizedByPlacement() throws {
         let folder = try XCTUnwrap(
             RemoteAction.catalog.first(where: { $0.eligibility == .actionsRingOnly })
@@ -3196,7 +3345,9 @@ final class BackendModelsTests: XCTestCase {
             slotID == "ok" && trigger == .tap ? "play-pause" : nil
         }
         var messages: [String] = []
+        var automaticResults: [(String, ActionExecutionResult)] = []
         coordinator.onLog = { messages.append($0) }
+        coordinator.onAutomaticExecutionResult = { automaticResults.append(($0, $1)) }
 
         coordinator.start()
         input.emit(slotID: "ok", phase: .began)
@@ -3207,6 +3358,9 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertTrue(messages.contains {
             $0 == "执行 ok.tap → play-pause 失败：系统拒绝执行"
         })
+        XCTAssertEqual(automaticResults.count, 1)
+        XCTAssertEqual(automaticResults.first?.0, "play-pause")
+        XCTAssertEqual(automaticResults.first?.1, .failure("系统拒绝执行"))
         coordinator.stop()
     }
 
@@ -3466,6 +3620,57 @@ final class BackendModelsTests: XCTestCase {
 
         store.showRuntimeActionsRing()
         XCTAssertEqual(store.toastMessage, "请先为 Actions Ring 添加操作")
+    }
+
+    @MainActor
+    func testDeletingSmartActionClearsEveryActionsRingAssignmentAndPersists() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiCoding-RingSmartActionDeletion-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configurationStore = LocalConfigurationStore(
+            fileURL: directory.appendingPathComponent("config.json")
+        )
+        let store = AppStore(configurationStore: configurationStore, runtimeServicesEnabled: false)
+        let workflow = SmartAction(
+            id: "ring-delete-test",
+            actionID: "custom-smart-ring-delete-test",
+            title: "删除清理测试",
+            subtitle: "1 个步骤",
+            symbol: "calendar",
+            tint: .purple,
+            stepCount: 1,
+            steps: [.action("launch-calendar")],
+            triggers: [.actionsRing]
+        )
+        let profile = AppProfile(
+            id: "com.example.ring-delete",
+            title: "Ring Delete",
+            subtitle: "应用专属配置",
+            symbol: "app.dashed",
+            tint: .gray,
+            bundleIdentifier: "com.example.ring-delete"
+        )
+
+        store.addSmartAction(workflow)
+        XCTAssertTrue(store.assignActionToActionsRing(actionID: workflow.actionID, at: 0))
+        store.toggleApplicationProfile(profile)
+        store.selectActionsRingProfile(profile)
+        XCTAssertTrue(store.assignActionToActionsRing(actionID: workflow.actionID, at: 1))
+
+        store.removeSmartAction(id: workflow.id)
+
+        XCTAssertNil(store.actionsRingAction(at: 0, for: nil))
+        XCTAssertNil(store.actionsRingAction(at: 1, for: profile.bundleIdentifier))
+        XCTAssertEqual(store.actionsRingActionIDs(for: nil)[0], "")
+        XCTAssertEqual(store.actionsRingActionIDs(for: profile.bundleIdentifier)[1], "")
+
+        let restored = AppStore(configurationStore: configurationStore, runtimeServicesEnabled: false)
+        XCTAssertNil(restored.actionsRingAction(at: 0, for: nil))
+        if !restored.isApplicationProfileEnabled(profile) {
+            restored.toggleApplicationProfile(profile)
+        }
+        XCTAssertNil(restored.actionsRingAction(at: 1, for: profile.bundleIdentifier))
+        XCTAssertEqual(restored.actionsRingActionIDs(for: profile.bundleIdentifier)[1], "")
     }
 
     @MainActor
@@ -3877,6 +4082,39 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertFalse(store.toastMessage?.contains("已运行") == true)
     }
 
+    @MainActor
+    func testToastToneDistinguishesRoutineFeedbackFromImportantErrors() {
+        let store = makeIsolatedStore()
+
+        store.showToast("已保存")
+        XCTAssertEqual(store.toastMessage, "已保存")
+        XCTAssertEqual(store.toastTone, .info)
+
+        store.showImportantToast("无法保存")
+        XCTAssertEqual(store.toastMessage, "无法保存")
+        XCTAssertEqual(store.toastTone, .error)
+
+        store.showActionNotifications = false
+        store.showToast("不应覆盖重要错误")
+        XCTAssertEqual(store.toastMessage, "无法保存")
+        XCTAssertEqual(store.toastTone, .error)
+    }
+
+    @MainActor
+    func testAutomaticExecutionFeedbackRespectsRoutineToggleButNeverHidesFailures() {
+        let coordinator = BackendCoordinator(keyRemapper: nil)
+        let store = makeIsolatedStore(backendCoordinator: coordinator)
+        _ = store.backendCoordinator
+        store.showActionNotifications = false
+
+        coordinator.onAutomaticExecutionResult?("copy", .success)
+        XCTAssertNil(store.toastMessage)
+
+        coordinator.onAutomaticExecutionResult?("copy", .failure("没有辅助功能权限"))
+        XCTAssertEqual(store.toastTone, .error)
+        XCTAssertEqual(store.toastMessage, "“复制”执行失败：没有辅助功能权限")
+    }
+
     func testActionRunFeedbackShowsSuccessOnlyAfterSuccessfulCompletion() {
         var feedback = ActionRunFeedbackState()
 
@@ -4122,4 +4360,28 @@ private final class ControllableRemoteInputService: RemoteInputServicing {
     func emitVoice(_ report: RemoteVoiceReport) {
         onVoiceReport?(report)
     }
+}
+
+private final class FailingRemoteInputService: RemoteInputServicing {
+    var onEvent: ((RemoteInputEvent) -> Void)?
+    var onVoiceReport: ((RemoteVoiceReport) -> Void)?
+    var onConnectionChanged: ((Bool) -> Void)?
+    var onUnknownUsage: ((UInt32, Bool) -> Void)?
+    private let message: String
+    private(set) var startCount = 0
+
+    init(message: String) {
+        self.message = message
+    }
+
+    func start() throws {
+        startCount += 1
+        throw NSError(
+            domain: "MiCodingTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
+    }
+
+    func stop() {}
 }
